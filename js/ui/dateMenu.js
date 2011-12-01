@@ -180,26 +180,26 @@ DateMenuButton.prototype = {
                 if (showDate)
                     /* Translators: This is the time format with date used
                        in 24-hour mode. */
-                    clockFormat = showSeconds ? _("%a %b %e, %R:%S")
-                                              : _("%a %b %e, %R");
+                    clockFormat = showSeconds ? _("%b %e, %R:%S")
+                                              : _("%b %e, %R");
                 else
                     /* Translators: This is the time format without date used
                        in 24-hour mode. */
-                    clockFormat = showSeconds ? _("%a %R:%S")
-                                              : _("%a %R");
+                    clockFormat = showSeconds ? _("%R:%S")
+                                              : _("%R");
                 break;
             case '12h':
             default:
                 if (showDate)
                     /* Translators: This is a time format with date used
                        for AM/PM. */
-                    clockFormat = showSeconds ? _("%a %b %e, %l:%M:%S %p")
-                                              : _("%a %b %e, %l:%M %p");
+                    clockFormat = showSeconds ? _("%b %e, %l:%M:%S %p")
+                                              : _("%b %e, %l:%M %p");
                 else
                     /* Translators: This is a time format without date used
                        for AM/PM. */
-                    clockFormat = showSeconds ? _("%a %l:%M:%S %p")
-                                              : _("%a %l:%M %p");
+                    clockFormat = showSeconds ? _("%l:%M:%S %p")
+                                              : _("%l:%M %p");
                 break;
         }
 
