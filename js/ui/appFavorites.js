@@ -65,6 +65,8 @@ AppFavorites.prototype = {
         if (appId in this._favorites)
             return false;
 
+		global.log(appId);
+		
         let app = Shell.AppSystem.get_default().lookup_app(appId);
 
         if (!app)
