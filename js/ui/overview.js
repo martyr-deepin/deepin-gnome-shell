@@ -492,7 +492,7 @@ Overview.prototype = {
         this.hide();
 
         let primary = Main.layoutManager.primaryMonitor;
-        let rtl = !(St.Widget.get_default_direction () == St.TextDirection.RTL);
+        let rtl = (St.Widget.get_default_direction () == St.TextDirection.RTL);
 
         let contentY = Main.panel.actor.height;
         let contentHeight = primary.height - contentY - Main.messageTray.actor.height;
