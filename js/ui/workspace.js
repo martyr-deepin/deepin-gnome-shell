@@ -529,7 +529,7 @@ WindowOverlay.prototype = {
 
         let gconf = GConf.Client.get_default();
         let layout = gconf.get_string(BUTTON_LAYOUT_KEY);
-        let rtl = St.Widget.get_default_direction() == St.TextDirection.RTL;
+        let rtl = !(St.Widget.get_default_direction() == St.TextDirection.RTL);
 
         let split = layout.split(":");
         let side;
@@ -987,6 +987,8 @@ Workspace.prototype = {
      *  ANIMATE - Indicates that we need animate changing position.
      */
     positionWindows : function(flags) {
+		global.log("test");
+		
         if (this._repositionWindowsId > 0) {
             Mainloop.source_remove(this._repositionWindowsId);
             this._repositionWindowsId = 0;

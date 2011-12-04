@@ -381,6 +381,8 @@ WorkspacesView.prototype = {
     },
 
     _dragEnd: function() {
+		global.log("Hello");
+		
         DND.removeDragMonitor(this._dragMonitor);
         this._inDrag = false;
 
@@ -663,7 +665,7 @@ WorkspacesDisplay.prototype = {
         let controlsVisible = this._controls.get_theme_node().get_length('visible-width');
         let controlsReserved = controlsVisible * (1 - this._zoomFraction) + controlsNatural * this._zoomFraction;
 
-        let rtl = (St.Widget.get_default_direction () == St.TextDirection.RTL);
+        let rtl = !(St.Widget.get_default_direction () == St.TextDirection.RTL);
         if (rtl) {
             childBox.x2 = controlsReserved;
             childBox.x1 = childBox.x2 - controlsNatural;
@@ -694,7 +696,7 @@ WorkspacesDisplay.prototype = {
 
         let [x, y] = this.actor.get_transformed_position();
 
-        let rtl = (St.Widget.get_default_direction () == St.TextDirection.RTL);
+        let rtl = !(St.Widget.get_default_direction () == St.TextDirection.RTL);
 
         let clipWidth = width - controlsVisible;
         let clipHeight = (fullHeight / fullWidth) * clipWidth;
