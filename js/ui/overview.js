@@ -492,7 +492,7 @@ Overview.prototype = {
         this.hide();
 
         let primary = Main.layoutManager.primaryMonitor;
-        let rtl = (St.Widget.get_default_direction () == St.TextDirection.RTL);
+        let rtl = !(St.Widget.get_default_direction () == St.TextDirection.RTL);
 
         let contentY = Main.panel.actor.height;
         let contentHeight = primary.height - contentY - Main.messageTray.actor.height;
@@ -507,7 +507,7 @@ Overview.prototype = {
         let viewWidth = primary.width - dashWidth - this._spacing;
         let viewHeight = contentHeight - 2 * this._spacing;
         let viewY = contentY + this._spacing;
-        let viewX = rtl ? 0 : dashWidth + this._spacing;
+        let viewX = (!rtl) ? 0 : dashWidth + this._spacing;
 
         // Set the dash's x position - y is handled by a constraint
         let dashX;

@@ -19,7 +19,6 @@ const WORKSPACE_SWITCH_TIME = 0.25;
 // Note that mutter has a compile-time limit of 36
 const MAX_WORKSPACES = 16;
 
-
 const CONTROLS_POP_IN_TIME = 0.1;
 
 
