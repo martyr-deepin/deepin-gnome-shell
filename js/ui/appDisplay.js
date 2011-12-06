@@ -226,6 +226,10 @@ ViewByCategories.prototype = {
             this._selectCategory(index);
         }));
 
+        button.connect('notify::hover', Lang.bind(this, function() {
+            this._selectCategory(index);
+        }));
+
         var apps;
         if (dir == null) {
             apps = allApps;

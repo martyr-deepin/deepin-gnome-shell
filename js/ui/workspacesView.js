@@ -380,8 +380,6 @@ WorkspacesView.prototype = {
     },
 
     _dragEnd: function() {
-		global.log("Hello");
-		
         DND.removeDragMonitor(this._dragMonitor);
         this._inDrag = false;
 

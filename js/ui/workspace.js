@@ -987,8 +987,6 @@ Workspace.prototype = {
      *  ANIMATE - Indicates that we need animate changing position.
      */
     positionWindows : function(flags) {
-		global.log("test");
-		
         if (this._repositionWindowsId > 0) {
             Mainloop.source_remove(this._repositionWindowsId);
             this._repositionWindowsId = 0;

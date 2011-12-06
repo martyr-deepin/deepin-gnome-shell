@@ -12,7 +12,7 @@ const St = imports.gi.St;
 const Main = imports.ui.main;
 const Tweener = imports.ui.tweener;
 
-const POPUP_APPICON_SIZE = 96;
+const POPUP_APPICON_SIZE = 100;
 const POPUP_SCROLL_TIME = 0.10; // seconds
 const POPUP_DELAY_TIMEOUT = 150; // milliseconds
 const POPUP_FADE_OUT_TIME = 0.1; // seconds
