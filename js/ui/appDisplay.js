@@ -29,6 +29,10 @@ const MAX_APPLICATION_WORK_MILLIS = 75;
 const MENU_POPUP_TIMEOUT = 600;
 const SCROLL_TIME = 0.1;
 
+const CATEGORY_HOVER_TIMEOUT = 100;
+let categoryHoverStatus = {};
+let categoryHoverTimeoutIds = {};
+
 function AlphabeticalView() {
     this._init();
 }
@@ -216,19 +220,52 @@ ViewByCategories.prototype = {
             }
         }
     },
+	
+	onCategoryEnter: function(index) {
+		// Enable category hover status.
+		categoryHoverStatus[index] = true;
+		
+		// And add timeout handler.
+		// Timeout handler will run if cursor still on selector area then.
+		categoryHoverTimeoutIds[index] = Mainloop.timeout_add(
+			CATEGORY_HOVER_TIMEOUT,
+			Lang.bind(this, function() {this.onCategoryTimeout(index);})
+		);
+	},
+
+	onCategoryLeave: function(index) {
+		if (categoryHoverStatus[index]) {
+			// Disable category hover status if cursor out of tab area.
+			categoryHoverStatus[index] = false;
+
+			// And try to remove timeout handler.
+			if (categoryHoverTimeoutIds[index]) {
+				Mainloop.source_remove(categoryHoverTimeoutIds[index]);
+			}
+		}
+	},
+	
+	onCategoryTimeout: function(index) {
+		// Just select category when cursor still at selector.
+		if (categoryHoverStatus[index]) {
+			this._selectCategory(index);
+		}
+
+		return false;
+	},
 
     _addCategory: function(name, index, dir, allApps) {
         let button = new St.Button({ label: GLib.markup_escape_text (name, -1),
+									 reactive: true,
                                      style_class: 'app-filter',
                                      x_align: St.Align.START,
                                      can_focus: true });
         button.connect('clicked', Lang.bind(this, function() {
             this._selectCategory(index);
         }));
-
-        button.connect('notify::hover', Lang.bind(this, function() {
-            this._selectCategory(index);
-        }));
+		
+		button.connect('enter-event', Lang.bind(this, function() {this.onCategoryEnter(index);}));
+		button.connect('leave-event', Lang.bind(this, function() {this.onCategoryLeave(index);}));
 
         var apps;
         if (dir == null) {
