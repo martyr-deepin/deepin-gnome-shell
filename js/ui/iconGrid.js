@@ -27,6 +27,8 @@ BaseIcon.prototype = {
                            Lang.bind(this, this._onStyleChanged));
 
         this._spacing = 0;
+        this._binSpacing = 0;
+        this._labelSpacing = 0;
 
         let box = new Shell.GenericContainer();
         box.connect('allocate', Lang.bind(this, this._allocate));
@@ -37,12 +39,14 @@ BaseIcon.prototype = {
         this.actor.set_child(box);
 
         this.iconSize = ICON_SIZE;
-        this._iconBin = new St.Bin();
+        this._iconBin = new St.Bin({style_class: 'overview-icon-bin'});
 
         box.add_actor(this._iconBin);
 
         if (params.showLabel) {
-            this.label = new St.Label({ text: label });
+            this.label = new St.Label({ style_class: 'overview-icon-label',
+										text: label });
+			this.label.get_clutter_text().set_line_wrap(true);
             box.add_actor(this.label);
         } else {
             this.label = null;
@@ -69,23 +73,24 @@ BaseIcon.prototype = {
 
         if (this.label) {
             let [labelMinHeight, labelNatHeight] = this.label.get_preferred_height(-1);
-            preferredHeight += this._spacing + labelNatHeight;
+            preferredHeight += this._spacing + this._binSpacing + this._labelSpacing + labelNatHeight;
 
             let labelHeight = availHeight >= preferredHeight ? labelNatHeight
                                                              : labelMinHeight;
-            iconSize -= this._spacing + labelHeight;
+			
+            iconSize -= this._spacing + this._binSpacing + this._labelSpacing + labelHeight;
 
             childBox.x1 = 0;
             childBox.x2 = availWidth;
-            childBox.y1 = iconSize + this._spacing;
+            childBox.y1 = iconSize + this._spacing + this._binSpacing * 2 + this._labelSpacing;
             childBox.y2 = childBox.y1 + labelHeight;
             this.label.allocate(childBox, flags);
         }
 
         childBox.x1 = Math.floor((availWidth - iconNatWidth) / 2);
-        childBox.y1 = Math.floor((iconSize - iconNatHeight) / 2);
         childBox.x2 = childBox.x1 + iconNatWidth;
-        childBox.y2 = childBox.y1 + iconNatHeight;
+        childBox.y1 = Math.floor((iconSize - iconNatHeight) / 2) + this._binSpacing;
+        childBox.y2 = childBox.y1 + iconNatHeight + this._binSpacing;
         this._iconBin.allocate(childBox, flags);
     },
 
@@ -100,8 +105,8 @@ BaseIcon.prototype = {
 
         if (this.label) {
             let [labelMinHeight, labelNatHeight] = this.label.get_preferred_height(forWidth);
-            alloc.min_size += this._spacing + labelMinHeight;
-            alloc.natural_size += this._spacing + labelNatHeight;
+            alloc.min_size += this._spacing + this._binSpacing + this._labelSpacing + labelMinHeight;
+            alloc.natural_size += this._spacing + this._binSpacing + this._labelSpacing + labelNatHeight;
         }
     },
 
@@ -137,7 +142,11 @@ BaseIcon.prototype = {
 
     _onStyleChanged: function() {
         let node = this.actor.get_theme_node();
+		let binNode = this._iconBin.get_theme_node();
+		let labelNode = this.label.get_theme_node();
         this._spacing = node.get_length('spacing');
+		this._binSpacing = binNode.get_length('spacing');
+        this._labelSpacing = labelNode.get_length('spacing');
 
         let size;
         if (this._setSizeManually) {
