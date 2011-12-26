@@ -112,12 +112,12 @@ DateMenuButton.prototype = {
             item = new St.DrawingArea({ style_class: 'calendar-vertical-separator',
                                         pseudo_class: 'highlighted' });
             item.connect('repaint', Lang.bind(this, _onVertSepRepaint));
-            hbox.add(item);
+            // hbox.add(item);
 
             // Fill up the second column
             vbox = new St.BoxLayout({name:     'calendarEventsArea',
                                      vertical: true});
-            hbox.add(vbox, { expand: true });
+            // hbox.add(vbox, { expand: true });
 
             // Event list
             vbox.add(this._eventList.actor, { expand: true });
