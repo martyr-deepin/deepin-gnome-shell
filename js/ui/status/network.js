@@ -1567,6 +1567,8 @@ NMApplet.prototype = {
             this._client.networking_enabled = true;
         }));
         this._statusSection.actor.hide();
+		this.menu._arrowAlignment = 0.5;
+		this.menu._arrowSide = St.Side.TOP;
         this.menu.addMenuItem(this._statusSection);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 

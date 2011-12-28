@@ -43,6 +43,8 @@ Indicator.prototype = {
         this._outputSlider = new PopupMenu.PopupSliderMenuItem(0);
         this._outputSlider.connect('value-changed', Lang.bind(this, this._sliderChanged, '_output'));
         this._outputSlider.connect('drag-end', Lang.bind(this, this._notifyVolumeChange));
+		this.menu._arrowAlignment = 0.5;
+		this.menu._arrowSide = St.Side.TOP;
         this.menu.addMenuItem(this._outputTitle);
         this.menu.addMenuItem(this._outputSlider);
 

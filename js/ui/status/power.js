@@ -73,6 +73,8 @@ Indicator.prototype = {
         this._batteryItem = new PopupMenu.PopupMenuItem('', { reactive: false });
         this._primaryPercentage = new St.Label();
         this._batteryItem.addActor(this._primaryPercentage, { align: St.Align.END });
+		this.menu._arrowAlignment = 0.5;
+		this.menu._arrowSide = St.Side.TOP;
         this.menu.addMenuItem(this._batteryItem);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
