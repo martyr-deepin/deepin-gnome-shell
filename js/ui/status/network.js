@@ -1621,7 +1621,7 @@ NMApplet.prototype = {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addSettingsAction(_("Network Settings"), 'gnome-network-panel.desktop');
 		
-        this.createNetworkItem = new PopupMenu.PopupMenuItem(_("Create Network");)
+        this.createNetworkItem = new PopupMenu.PopupMenuItem(_("Create Network"));
         this.createNetworkItem.connect(
 			'activate', 
 			Lang.bind(this, function() {
