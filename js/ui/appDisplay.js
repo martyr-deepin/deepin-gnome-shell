@@ -278,8 +278,10 @@ ViewByCategories.prototype = {
                                     name: name,
                                     button: button });
         }
-
-        this._categoryBox.add(button, { expand: true, x_fill: true, y_fill: false });
+		
+		if (apps.length > 0) {
+			this._categoryBox.add(button, { expand: true, x_fill: true, y_fill: false });
+		}
     },
 
     _removeAll: function() {
