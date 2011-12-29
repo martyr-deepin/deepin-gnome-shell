@@ -1601,6 +1601,9 @@ msgstr "%1$s：%2$s"
 #~ msgid "You're now connected to VPN network '%s'"
 #~ msgstr "您現在已連線至 VPN 網路「%s」"
 
+msgid "Remove from Desktop"
+msgstr "從桌面移除"
+
 msgid "Add to Desktop"
 msgstr "添加到桌面"
 

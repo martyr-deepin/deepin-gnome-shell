@@ -1924,6 +1924,9 @@ msgstr "%1$s: %2$s"
 #~ msgid "Sidebar"
 #~ msgstr "侧边栏"
 
+msgid "Remove from Desktop"
+msgstr "从桌面移除"
+
 msgid "Add to Desktop"
 msgstr "添加到桌面"
 
