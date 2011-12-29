@@ -1923,3 +1923,9 @@ msgstr "%1$s: %2$s"
 
 #~ msgid "Sidebar"
 #~ msgstr "侧边栏"
+
+msgid "Add to Desktop"
+msgstr "添加到桌面"
+
+msgid "Create Network"
+msgstr "创建网络"

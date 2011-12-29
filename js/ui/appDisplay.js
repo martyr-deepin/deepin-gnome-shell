@@ -734,7 +734,7 @@ AppIconMenu.prototype = {
                                                                 : _("Add to Favorites"));
             this._appendSeparator();
 
-            this._toggleAddToDesktopMenuItem = this._appendMenuItem(isDesktopIcon ? "Remove from desktop" : "Add to desktop");
+            this._toggleAddToDesktopMenuItem = this._appendMenuItem(isDesktopIcon ? "Remove from desktop" : _("Add to Desktop"));
         }
     },
 
