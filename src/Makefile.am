@@ -259,7 +259,7 @@ shell-enum-types.c: $(srcdir)/shell-enum-types.c.in stamp-shell-enum-types.h
 	rm -f $(@F).tmp
 EXTRA_DIST += shell-enum-types.c.in
 
-libgnome_shell_la_LDFLAGS = -avoid-version
+libgnome_shell_la_LDFLAGS = -avoid-version -rpath $(pkglibdir):/usr/lib/gnome-bluetooth -R $(pkglibdir)
 libgnome_shell_la_LIBADD =		\
 	-lm			\
 	$(GNOME_SHELL_LIBS)	\

@@ -888,7 +888,7 @@ run_js_test_LDFLAGS = -export-dynamic
 run_js_test_SOURCES = \
 	run-js-test.c
 
-libgnome_shell_la_LDFLAGS = -avoid-version
+libgnome_shell_la_LDFLAGS = -avoid-version -rpath $(pkglibdir):/usr/lib/gnome-bluetooth -R $(pkglibdir)
 libgnome_shell_la_LIBADD = \
 	-lm			\
 	$(GNOME_SHELL_LIBS)	\

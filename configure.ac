@@ -1,5 +1,5 @@
 AC_PREREQ(2.63)
-AC_INIT([gnome-shell],[3.2.1],[https://bugzilla.gnome.org/enter_bug.cgi?product=gnome-shell],[gnome-shell])
+AC_INIT([gnome-shell],[3.2.2.1],[https://bugzilla.gnome.org/enter_bug.cgi?product=gnome-shell],[gnome-shell])
 
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_SRCDIR([src/shell-global.c])
@@ -89,6 +89,7 @@ PKG_CHECK_MODULES(GNOME_SHELL, gio-2.0 >= $GIO_MIN_VERSION
 			       libgnome-menu-3.0 $recorder_modules gconf-2.0
                                gdk-x11-3.0 libsoup-2.4
 			       clutter-x11-1.0 >= $CLUTTER_MIN_VERSION
+			       clutter-glx-1.0 >= $CLUTTER_MIN_VERSION
                                libstartup-notification-1.0 >= $STARTUP_NOTIFICATION_MIN_VERSION
                                gobject-introspection-1.0 >= $GOBJECT_INTROSPECTION_MIN_VERSION
 			       libcanberra

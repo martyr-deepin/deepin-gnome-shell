@@ -84,7 +84,7 @@ msgstr "如果为真，在日历中显示 ISO 周日期。"
 
 #: ../data/org.gnome.shell.gschema.xml.in.h:11
 msgid "List of desktop file IDs for favorite applications"
-msgstr "任务栏中的应用程序的 desktop 文件 ID 的列表"
+msgstr "收藏夹中的应用程序的 desktop 文件 ID 的列表"
 
 #: ../data/org.gnome.shell.gschema.xml.in.h:13
 #, no-c-format
@@ -260,21 +260,21 @@ msgstr "新窗口"
 
 #: ../js/ui/appDisplay.js:687
 msgid "Remove from Favorites"
-msgstr "从任务栏中移除"
+msgstr "从收藏夹中移除"
 
 #: ../js/ui/appDisplay.js:688
 msgid "Add to Favorites"
-msgstr "添加到任务栏"
+msgstr "添加到收藏夹"
 
 #: ../js/ui/appFavorites.js:89
 #, c-format
 msgid "%s has been added to your favorites."
-msgstr "%s 已经添加到了您的任务栏。"
+msgstr "%s 已经添加到了您的收藏夹。"
 
 #: ../js/ui/appFavorites.js:120
 #, c-format
 msgid "%s has been removed from your favorites."
-msgstr "%s 已经从您的任务栏移除。"
+msgstr "%s 已经从您的收藏夹移除。"
 
 #: ../js/ui/autorunManager.js:280
 msgid "Removable Devices"
@@ -1883,7 +1883,7 @@ msgstr "%1$s: %2$s"
 #~ "格)。"
 
 #~ msgid "Drag here to add favorites"
-#~ msgstr "拖到这里加入任务栏"
+#~ msgstr "拖到这里加入收藏夹"
 
 #~ msgid "Find"
 #~ msgstr "查找"
@@ -1923,12 +1923,3 @@ msgstr "%1$s: %2$s"
 
 #~ msgid "Sidebar"
 #~ msgstr "侧边栏"
-
-msgid "Remove from Desktop"
-msgstr "从桌面移除"
-
-msgid "Add to Desktop"
-msgstr "添加到桌面"
-
-msgid "Create Network"
-msgstr "创建网络"

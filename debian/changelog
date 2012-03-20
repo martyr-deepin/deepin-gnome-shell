@@ -1,3 +1,40 @@
+gnome-shell (3.2.2.1-0ubuntu0.1) oneiric-proposed; urgency=low
+
+  [ Jeremy Bicha ]
+  * New upstream release (LP: #921343)
+    - Fix broken gnome-shell-extension-tool (LP: #853882)
+    - Fixes lots of crashes and some memory leaks
+    - extensions.gnome.org should now work with Webkit-based browsers
+  * Split common files and translations to gnome-shell-common. Add
+    appropriate Breaks/Replaces.
+  * 02_rpath-bluetooth-applet.patch:
+    - Add an RPATH so that the compilation doesn't fail when g-ir-scanner
+      tries to analyze libgnome-shell.so linked against
+  * 04_remove-glx-dependency-on-armel.patch: Refactored
+  * 07-NetworkMenu-fix-logic-for-updating-wifi-icon.patch
+    - Fix the logic for connecting to the current wifi strength,
+      prevents the network icon from becoming stale (from upstream git)
+  * 08-polkit-Find-the-best-user-to-authenticate-as.patch:
+    - When picking a user to authenticate with, try the current user
+      first, then root and if all else fails the first user that is allowed to
+      authenticate. (from upstream git)
+  * 09-respect-NoDisplay-semantics-for-app-menu.patch:
+    - Respect NoDisplay semantics for applications menu. This avoids duplicate
+      menu entries when menu-xdg is installed. Closes: #649559
+
+  [ Timo Kluck ]
+  * 10-bluetooth-fix-connection-from-gs-menu.patch:
+    - Fix bluetooth panel switch moving independently from actual
+      connection status (LP: #918208)
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 23 Jan 2012 14:25:45 -0500
+
+gnome-shell (3.2.1-0ubuntu1.1) oneiric-proposed; urgency=low
+
+  * No-change rebuild to fix up dependencies (LP: #903382)
+
+ -- Evan Broder <evan@ebroder.net>  Mon, 19 Dec 2011 23:13:06 -0800
+
 gnome-shell (3.2.1-0ubuntu1) oneiric-proposed; urgency=low
 
   [ Jeremy Bicha ]

@@ -3,9 +3,9 @@
 /* The name of this package (not localized) */
 const PACKAGE_NAME = 'gnome-shell';
 /* The version of this package */
-const PACKAGE_VERSION = '3.2.1';
+const PACKAGE_VERSION = '3.2.2.1';
 /* The version of GJS we're linking to */
-const GJS_VERSION = '1.30.0';
+const GJS_VERSION = '1.30.1';
 /* 1 if gnome-bluetooth is available, 0 otherwise */
 const HAVE_BLUETOOTH = 1;
 /* The system TLS CA list */

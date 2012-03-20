@@ -73,7 +73,7 @@ msgstr "如果設為 true，在日曆中顯示 ISO 週數。"
 
 #: ../data/org.gnome.shell.gschema.xml.in.h:11
 msgid "List of desktop file IDs for favorite applications"
-msgstr "任務欄的應用程式桌面檔案 ID 清單"
+msgstr "喜好的應用程式桌面檔案 ID 清單"
 
 #: ../data/org.gnome.shell.gschema.xml.in.h:13
 #, no-c-format
@@ -106,7 +106,7 @@ msgstr "在時刻中顯示秒數"
 msgid ""
 "The applications corresponding to these identifiers will be displayed in the "
 "favorites area."
-msgstr "對應這些辨別碼的應用程式會顯示在任務欄區域。"
+msgstr "對應這些辨別碼的應用程式會顯示在喜好區域。"
 
 #: ../data/org.gnome.shell.gschema.xml.in.h:18
 msgid ""
@@ -236,21 +236,21 @@ msgstr "新視窗"
 
 #: ../js/ui/appDisplay.js:687
 msgid "Remove from Favorites"
-msgstr "自任務欄中移除"
+msgstr "自喜好中移除"
 
 #: ../js/ui/appDisplay.js:688
 msgid "Add to Favorites"
-msgstr "加入任務欄"
+msgstr "加入喜好"
 
 #: ../js/ui/appFavorites.js:89
 #, c-format
 msgid "%s has been added to your favorites."
-msgstr "%s 已加入你的任務欄中。"
+msgstr "%s 已加入你的喜好中。"
 
 #: ../js/ui/appFavorites.js:120
 #, c-format
 msgid "%s has been removed from your favorites."
-msgstr "%s 已經從你的任務欄中移除。"
+msgstr "%s 已經從你的喜好中移除。"
 
 #: ../js/ui/autorunManager.js:280
 msgid "Removable Devices"
@@ -1600,12 +1600,3 @@ msgstr "%1$s：%2$s"
 
 #~ msgid "You're now connected to VPN network '%s'"
 #~ msgstr "您現在已連線至 VPN 網路「%s」"
-
-msgid "Remove from Desktop"
-msgstr "從桌面移除"
-
-msgid "Add to Desktop"
-msgstr "添加到桌面"
-
-msgid "Create Network"
-msgstr "創建網絡"

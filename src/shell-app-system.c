@@ -102,11 +102,7 @@ shell_app_system_init (ShellAppSystem *self)
                                                    NULL,
                                                    (GDestroyNotify)g_object_unref);
 
-  /* For now, we want to pick up Evince, Nautilus, etc.  We'll
-   * handle NODISPLAY semantics at a higher level or investigate them
-   * case by case.
-   */
-  priv->apps_tree = gmenu_tree_new ("applications.menu", GMENU_TREE_FLAGS_INCLUDE_NODISPLAY);
+  priv->apps_tree = gmenu_tree_new ("applications.menu", 0);
   g_signal_connect (priv->apps_tree, "changed", G_CALLBACK (on_apps_tree_changed_cb), self);
 
   priv->settings_tree = gmenu_tree_new ("gnomecc.menu", 0);
