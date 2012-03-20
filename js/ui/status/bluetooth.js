@@ -205,7 +205,8 @@ Indicator.prototype = {
     _buildDeviceSubMenu: function(item, device) {
         if (device.can_connect) {
             item._connected = device.connected;
-            item._connectedMenuitem = new PopupMenu.PopupSwitchMenuItem(_("Connection"), device.connected);
+            let menuitem = new PopupMenu.PopupSwitchMenuItem(_("Connection"), device.connected);
+            item._connectedMenuitem = menuitem;
             item._connectedMenuitem.connect('toggled', Lang.bind(this, function() {
                 if (item._connected > ConnectionState.CONNECTED) {
                     // operation already in progress, revert

@@ -1,3 +1,9 @@
+gnome-shell (3.2.2.1deepin-0) oneiric; urgency=low
+
+  * Merge gnome-shell 3.2.2.1-0ubuntu0.1
+
+ -- Andy Stewart <andy@andy>  Tue, 20 Mar 2012 11:36:05 +0800
+
 gnome-shell (3.2.2.1-0ubuntu0.1) oneiric-proposed; urgency=low
 
   [ Jeremy Bicha ]
