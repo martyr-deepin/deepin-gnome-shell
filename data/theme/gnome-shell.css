@@ -163,10 +163,10 @@ StTooltip StLabel { /*Controls the tooltips. Oh really, Einstein!*/
 
 .popup-menu-boxpointer {
 	background-gradient-direction: vertical;
-	background-gradient-start: rgba(0,0,0,0.6);
-	background-gradient-end: rgba(0,0,0,0.4);
+	background-gradient-start: rgba(0,0,0,0.9);
+	background-gradient-end: rgba(0,0,0,0.8);
 	border: 1px solid rgba(125,125,125,0.2);
-	box-shadow:  inset 0px -1px 0px 0px rgba(255,255,255,0.2);
+	box-shadow:  inset 0px 0px 0px 0px rgba(255,255,255,0.2);
     padding: 2px 0px 0px 2px;
 }
 
@@ -199,7 +199,7 @@ StTooltip StLabel { /*Controls the tooltips. Oh really, Einstein!*/
 
 .popup-menu-item:active {
    	color: rgba(255,255,255,1);
-    background-color: rgba(0,0,0,0.2);
+    background-color: rgba(125,125,125,0.2);
 }
 
 .popup-image-menu-item {
