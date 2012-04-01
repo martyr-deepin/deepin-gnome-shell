@@ -1603,3 +1603,9 @@ msgstr "%1$s：%2$s"
 
 msgid "Create Network"
 msgstr "創建網路"
+
+msgid "Add to Desktop"
+msgstr "添加到桌面"
+
+msgid "Remove from Desktop"
+msgstr "從桌面移除"
