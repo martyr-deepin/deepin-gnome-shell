@@ -121,7 +121,7 @@ const DateMenuButton = new Lang.Class({
             // Fill up the second column
             vbox = new St.BoxLayout({name:     'calendarEventsArea',
                                      vertical: true});
-            hbox.add(vbox, { expand: true });
+            // hbox.add(vbox, { expand: true });
 
             // Event list
             vbox.add(this._eventList.actor, { expand: true });
