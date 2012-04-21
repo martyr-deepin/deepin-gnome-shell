@@ -1,7 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Gio = imports.gi.Gio;
-const DBus = imports.dbus;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const Shell = imports.gi.Shell;
@@ -40,31 +39,26 @@ const UPDeviceState = {
     PENDING_DISCHARGE: 6
 };
 
-const PowerManagerInterface = {
-    name: 'org.gnome.SettingsDaemon.Power',
-    methods: [
-        { name: 'GetDevices', inSignature: '', outSignature: 'a(susdut)' },
-        { name: 'GetPrimaryDevice', inSignature: '', outSignature: '(susdut)' },
-        ],
-    signals: [
-        { name: 'Changed', inSignature: '' },
-        ],
-    properties: [
-        { name: 'Icon', signature: 's', access: 'read' },
-        ]
-};
-let PowerManagerProxy = DBus.makeProxyClass(PowerManagerInterface);
+const PowerManagerInterface = <interface name="org.gnome.SettingsDaemon.Power">
+<method name="GetDevices">
+    <arg type="a(susdut)" direction="out" />
+</method>
+<method name="GetPrimaryDevice">
+    <arg type="(susdut)" direction="out" />
+</method>
+<property name="Icon" type="s" access="read" />
+</interface>;
 
-function Indicator() {
-    this._init.apply(this, arguments);
-}
+const PowerManagerProxy = Gio.DBusProxy.makeProxyWrapper(PowerManagerInterface);
 
-Indicator.prototype = {
-    __proto__: PanelMenu.SystemStatusButton.prototype,
+const Indicator = new Lang.Class({
+    Name: 'PowerIndicator',
+    Extends: PanelMenu.SystemStatusButton,
 
     _init: function() {
-        PanelMenu.SystemStatusButton.prototype._init.call(this, 'battery-missing');
-        this._proxy = new PowerManagerProxy(DBus.session, BUS_NAME, OBJECT_PATH);
+        this.parent('battery-missing', _("Battery"));
+
+        this._proxy = new PowerManagerProxy(Gio.DBus.session, BUS_NAME, OBJECT_PATH);
 
         this._deviceItems = [ ];
         this._hasPrimary = false;
@@ -83,19 +77,20 @@ Indicator.prototype = {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addSettingsAction(_("Power Settings"), 'gnome-power-panel.desktop');
 
-        this._proxy.connect('Changed', Lang.bind(this, this._devicesChanged));
+        this._proxy.connect('g-properties-changed',
+                            Lang.bind(this, this._devicesChanged));
         this._devicesChanged();
     },
 
     _readPrimaryDevice: function() {
-        this._proxy.GetPrimaryDeviceRemote(Lang.bind(this, function(device, error) {
+        this._proxy.GetPrimaryDeviceRemote(Lang.bind(this, function(result, error) {
             if (error) {
                 this._hasPrimary = false;
                 this._primaryDeviceId = null;
                 this._batteryItem.actor.hide();
                 return;
             }
-            let [device_id, device_type, icon, percentage, state, seconds] = device;
+            let [[device_id, device_type, icon, percentage, state, seconds]] = result;
             if (device_type == UPDeviceType.BATTERY) {
                 this._hasPrimary = true;
                 let time = Math.round(seconds / 60);
@@ -132,7 +127,7 @@ Indicator.prototype = {
     },
 
     _readOtherDevices: function() {
-        this._proxy.GetDevicesRemote(Lang.bind(this, function(devices, error) {
+        this._proxy.GetDevicesRemote(Lang.bind(this, function(result, error) {
             this._deviceItems.forEach(function(i) { i.destroy(); });
             this._deviceItems = [];
 
@@ -141,6 +136,7 @@ Indicator.prototype = {
             }
 
             let position = 0;
+            let [devices] = result;
             for (let i = 0; i < devices.length; i++) {
                 let [device_id, device_type] = devices[i];
                 if (device_type == UPDeviceType.AC_POWER || device_id == this._primaryDeviceId)
@@ -155,30 +151,26 @@ Indicator.prototype = {
     },
 
     _devicesChanged: function() {
-        this._proxy.GetRemote('Icon', Lang.bind(this, function(icon, error) {
-            if (icon) {
-                let gicon = Gio.icon_new_for_string(icon);
-                this.setGIcon(gicon);
-                this.actor.show();
-            } else {
-                this.menu.close();
-                this.actor.hide();
-            }
-        }));
+        let icon = this._proxy.Icon;
+        if (icon) {
+            let gicon = Gio.icon_new_for_string(icon);
+            this.setGIcon(gicon);
+            this.actor.show();
+        } else {
+            this.menu.close();
+            this.actor.hide();
+        }
         this._readPrimaryDevice();
         this._readOtherDevices();
     }
-};
+});
 
-function DeviceItem() {
-    this._init.apply(this, arguments);
-}
-
-DeviceItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+const DeviceItem = new Lang.Class({
+    Name: 'DeviceItem',
+    Extends: PopupMenu.PopupBaseMenuItem,
 
     _init: function(device) {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this, { reactive: false });
+        this.parent({ reactive: false });
 
         let [device_id, device_type, icon, percentage, state, time] = device;
 
@@ -225,4 +217,4 @@ DeviceItem.prototype = {
             return _("Unknown");
         }
     }
-}
+});

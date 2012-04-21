@@ -1,7 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
-const DBus = imports.dbus;
-const GConf = imports.gi.GConf;
+const GDesktopEnums = imports.gi.GDesktopEnums;
 const Gio = imports.gi.Gio;
 const Gtk = imports.gi.Gtk;
 const Lang = imports.lang;
@@ -30,8 +29,8 @@ const DPI_FACTOR_LARGE   = 1.25;
 const DPI_FACTOR_LARGER  = 1.5;
 const DPI_FACTOR_LARGEST = 2.0;
 
-const KEY_META_DIR       = '/apps/metacity/general';
-const KEY_VISUAL_BELL = KEY_META_DIR + '/visual_bell';
+const WM_SCHEMA            = 'org.gnome.desktop.wm.preferences';
+const KEY_VISUAL_BELL      = 'visual-bell';
 
 const DESKTOP_INTERFACE_SCHEMA = 'org.gnome.desktop.interface';
 const KEY_GTK_THEME      = 'gtk-theme';
@@ -40,19 +39,12 @@ const KEY_TEXT_SCALING_FACTOR = 'text-scaling-factor';
 
 const HIGH_CONTRAST_THEME = 'HighContrast';
 
-function ATIndicator() {
-    this._init.apply(this, arguments);
-}
-
-ATIndicator.prototype = {
-    __proto__: PanelMenu.SystemStatusButton.prototype,
+const ATIndicator = new Lang.Class({
+    Name: 'ATIndicator',
+    Extends: PanelMenu.SystemStatusButton,
 
     _init: function() {
-        PanelMenu.SystemStatusButton.prototype._init.call(this, 'preferences-desktop-accessibility', null);
-
-        let client = GConf.Client.get_default();
-        client.add_dir(KEY_META_DIR, GConf.ClientPreloadType.PRELOAD_ONELEVEL, null);
-        client.notify_add(KEY_META_DIR, Lang.bind(this, this._keyChanged), null, null);
+        this.parent('preferences-desktop-accessibility', _("Accessibility"));
 
         let highContrast = this._buildHCItem();
         this.menu.addMenuItem(highContrast);
@@ -72,7 +64,7 @@ ATIndicator.prototype = {
                                                                    'screen-keyboard-enabled');
         this.menu.addMenuItem(screenKeyboard);
 
-        let visualBell = this._buildItemGConf(_("Visual Alerts"), client, KEY_VISUAL_BELL);
+        let visualBell = this._buildItem(_("Visual Alerts"), WM_SCHEMA, KEY_VISUAL_BELL);
         this.menu.addMenuItem(visualBell);
 
         let stickyKeys = this._buildItem(_("Sticky Keys"), A11Y_SCHEMA, KEY_STICKY_KEYS_ENABLED);
@@ -99,22 +91,6 @@ ATIndicator.prototype = {
             widget.connect('toggled', function(item) {
                 on_set(item.state);
             });
-        return widget;
-    },
-
-    _buildItemGConf: function(string, client, key) {
-        function on_get() {
-            return client.get_bool(key);
-        }
-        let widget = this._buildItemExtended(string,
-            client.get_bool(key),
-            client.key_is_writable(key),
-            function(enabled) {
-                client.set_bool(key, enabled);
-            });
-        this.connect('gconf-changed', function() {
-            widget.setToggleState(client.get_bool(key));
-        });
         return widget;
     },
 
@@ -191,10 +167,5 @@ ATIndicator.prototype = {
             widget.setToggleState(active);
         });
         return widget;
-    },
-
-    _keyChanged: function() {
-        this.emit('gconf-changed');
     }
-};
-Signals.addSignalMethods(ATIndicator.prototype);
+});

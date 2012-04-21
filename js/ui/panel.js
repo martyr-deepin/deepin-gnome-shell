@@ -3,15 +3,20 @@
 const Cairo = imports.cairo;
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const Gtk = imports.gi.Gtk;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
+const Meta = imports.gi.Meta;
 const Pango = imports.gi.Pango;
 const Shell = imports.gi.Shell;
 const St = imports.gi.St;
 const Signals = imports.signals;
+const Atk = imports.gi.Atk;
 
 const Config = imports.misc.config;
 const CtrlAltTab = imports.ui.ctrlAltTab;
+const DND = imports.ui.dnd;
 const Layout = imports.ui.layout;
 const Overview = imports.ui.overview;
 const PopupMenu = imports.ui.popupMenu;
@@ -98,54 +103,59 @@ function _unpremultiply(color) {
 };
 
 
-function AnimatedIcon(name, size) {
-    this._init(name, size);
-}
+const AnimatedIcon = new Lang.Class({
+    Name: 'AnimatedIcon',
 
-AnimatedIcon.prototype = {
     _init: function(name, size) {
         this.actor = new St.Bin({ visible: false });
         this.actor.connect('destroy', Lang.bind(this, this._onDestroy));
-        this.actor.connect('notify::visible', Lang.bind(this, function() {
-            if (this.actor.visible) {
-                this._timeoutId = Mainloop.timeout_add(ANIMATED_ICON_UPDATE_TIMEOUT, Lang.bind(this, this._update));
-            } else {
-                if (this._timeoutId)
-                    Mainloop.source_remove(this._timeoutId);
-                this._timeoutId = 0;
-            }
-        }));
+        this.actor.connect('notify::visible', Lang.bind(this, this._onVisibleNotify));
 
         this._timeoutId = 0;
-        this._i = 0;
+        this._frame = 0;
         this._animations = St.TextureCache.get_default().load_sliced_image (global.datadir + '/theme/' + name, size, size);
         this.actor.set_child(this._animations);
     },
 
-    _update: function() {
-        this._animations.hide_all();
-        this._animations.show();
-        if (this._i && this._i < this._animations.get_n_children())
-            this._animations.get_nth_child(this._i++).show();
-        else {
-            this._i = 1;
-            if (this._animations.get_n_children())
-                this._animations.get_nth_child(0).show();
+    _disconnectTimeout: function() {
+        if (this._timeoutId > 0) {
+            Mainloop.source_remove(this._timeoutId);
+            this._timeoutId = 0;
         }
+    },
+
+    _onVisibleNotify: function() {
+        if (this.actor.visible)
+            this._timeoutId = Mainloop.timeout_add(ANIMATED_ICON_UPDATE_TIMEOUT, Lang.bind(this, this._update));
+        else
+            this._disconnectTimeout();
+    },
+
+    _showFrame: function(frame) {
+        let oldFrameActor = this._animations.get_child_at_index(this._frame);
+        if (oldFrameActor)
+            oldFrameActor.hide();
+
+        this._frame = (frame % this._animations.get_n_children());
+
+        let newFrameActor = this._animations.get_child_at_index(this._frame);
+        if (newFrameActor)
+            newFrameActor.show();
+    },
+
+    _update: function() {
+        this._showFrame(this._frame + 1);
         return true;
     },
 
     _onDestroy: function() {
-        if (this._timeoutId)
-            Mainloop.source_remove(this._timeoutId);
+        this._disconnectTimeout();
     }
-};
+});
 
-function TextShadower() {
-    this._init();
-}
+const TextShadower = new Lang.Class({
+    Name: 'TextShadower',
 
-TextShadower.prototype = {
     _init: function() {
         this.actor = new Shell.GenericContainer();
         this.actor.connect('get-preferred-width', Lang.bind(this, this._getPreferredWidth));
@@ -225,7 +235,7 @@ TextShadower.prototype = {
             child.allocate(childBox, flags);
         }
     }
-};
+});
 
 /**
  * AppMenuButton:
@@ -235,22 +245,26 @@ TextShadower.prototype = {
  * this menu also handles startup notification for it.  So when we
  * have an active startup notification, we switch modes to display that.
  */
-function AppMenuButton() {
-    this._init();
-}
+const AppMenuButton = new Lang.Class({
+    Name: 'AppMenuButton',
+    Extends: PanelMenu.Button,
 
-AppMenuButton.prototype = {
-    __proto__: PanelMenu.Button.prototype,
+    _init: function(menuManager) {
+        this.parent(0.0, null, true);
 
-    _init: function() {
-        PanelMenu.Button.prototype._init.call(this, 0.0);
+        this.actor.accessible_role = Atk.Role.MENU;
+
         this._startingApps = [];
 
+        this._menuManager = menuManager;
         this._targetApp = null;
+        this._appMenuNotifyId = 0;
+        this._actionGroupNotifyId = 0;
 
         let bin = new St.Bin({ name: 'appMenu' });
         this.actor.add_actor(bin);
 
+        this.actor.bind_property("reactive", this.actor, "can-focus", 0);
         this.actor.reactive = false;
         this._targetIsCurrent = false;
 
@@ -271,10 +285,6 @@ AppMenuButton.prototype = {
 
         this._iconBottomClip = 0;
 
-        this._quitMenu = new PopupMenu.PopupMenuItem('');
-        this.menu.addMenuItem(this._quitMenu);
-        this._quitMenu.connect('activate', Lang.bind(this, this._onQuit));
-
         this._visible = !Main.overview.visible;
         if (!this._visible)
             this.actor.hide();
@@ -294,7 +304,7 @@ AppMenuButton.prototype = {
 
         let tracker = Shell.WindowTracker.get_default();
         let appSys = Shell.AppSystem.get_default();
-        tracker.connect('notify::focus-app', Lang.bind(this, this._sync));
+        tracker.connect('notify::focus-app', Lang.bind(this, this._focusAppChanged));
         appSys.connect('app-state-changed', Lang.bind(this, this._onAppStateChanged));
 
         global.window_manager.connect('switch-workspace', Lang.bind(this, this._sync));
@@ -308,10 +318,11 @@ AppMenuButton.prototype = {
 
         this._visible = true;
         this.actor.show();
-        this.actor.reactive = true;
 
         if (!this._targetIsCurrent)
             return;
+
+        this.actor.reactive = true;
 
         Tweener.removeTweens(this.actor);
         Tweener.addTween(this.actor,
@@ -407,12 +418,12 @@ AppMenuButton.prototype = {
 
         let [minWidth, minHeight, naturalWidth, naturalHeight] = this._iconBox.get_preferred_size();
 
-        let direction = this.actor.get_direction();
+        let direction = this.actor.get_text_direction();
 
         let yPadding = Math.floor(Math.max(0, allocHeight - naturalHeight) / 2);
         childBox.y1 = yPadding;
         childBox.y2 = childBox.y1 + Math.min(naturalHeight, allocHeight);
-        if (direction == St.TextDirection.LTR) {
+        if (direction == Clutter.TextDirection.LTR) {
             childBox.x1 = 0;
             childBox.x2 = childBox.x1 + Math.min(naturalWidth, allocWidth);
         } else {
@@ -429,7 +440,7 @@ AppMenuButton.prototype = {
         childBox.y1 = yPadding;
         childBox.y2 = childBox.y1 + Math.min(naturalHeight, allocHeight);
 
-        if (direction == St.TextDirection.LTR) {
+        if (direction == Clutter.TextDirection.LTR) {
             childBox.x1 = Math.floor(iconWidth / 2);
             childBox.x2 = Math.min(childBox.x1 + naturalWidth, allocWidth);
         } else {
@@ -438,7 +449,7 @@ AppMenuButton.prototype = {
         }
         this._label.actor.allocate(childBox, flags);
 
-        if (direction == St.TextDirection.LTR) {
+        if (direction == Clutter.TextDirection.LTR) {
             childBox.x1 = Math.floor(iconWidth / 2) + this._label.actor.width;
             childBox.x2 = childBox.x1 + this._spinner.actor.width;
             childBox.y1 = box.y1;
@@ -451,12 +462,6 @@ AppMenuButton.prototype = {
             childBox.y2 = box.y2 - 1;
             this._spinner.actor.allocate(childBox, flags);
         }
-    },
-
-    _onQuit: function() {
-        if (this._targetApp == null)
-            return;
-        this._targetApp.request_quit();
     },
 
     _onAppStateChanged: function(appSys, app) {
@@ -475,16 +480,9 @@ AppMenuButton.prototype = {
         this._sync();
     },
 
-    _sync: function() {
+    _focusAppChanged: function() {
         let tracker = Shell.WindowTracker.get_default();
-        let lastStartedApp = null;
-        let workspace = global.screen.get_active_workspace();
-        for (let i = 0; i < this._startingApps.length; i++)
-            if (this._startingApps[i].is_on_workspace(workspace))
-                lastStartedApp = this._startingApps[i];
-
         let focusedApp = tracker.focus_app;
-
         if (!focusedApp) {
             // If the app has just lost focus to the panel, pretend
             // nothing happened; otherwise you can't keynav to the
@@ -492,6 +490,17 @@ AppMenuButton.prototype = {
             if (global.stage_input_mode == Shell.StageInputMode.FOCUSED)
                 return;
         }
+        this._sync();
+    },
+
+    _sync: function() {
+        let tracker = Shell.WindowTracker.get_default();
+        let focusedApp = tracker.focus_app;
+        let lastStartedApp = null;
+        let workspace = global.screen.get_active_workspace();
+        for (let i = 0; i < this._startingApps.length; i++)
+            if (this._startingApps[i].is_on_workspace(workspace))
+                lastStartedApp = this._startingApps[i];
 
         let targetApp = focusedApp != null ? focusedApp : lastStartedApp;
 
@@ -509,6 +518,9 @@ AppMenuButton.prototype = {
             return;
         }
 
+        if (!targetApp.is_on_workspace(workspace))
+            return;
+
         if (!this._targetIsCurrent) {
             this.actor.reactive = true;
             this._targetIsCurrent = true;
@@ -520,8 +532,10 @@ AppMenuButton.prototype = {
         }
 
         if (targetApp == this._targetApp) {
-            if (targetApp && targetApp.get_state() != Shell.AppState.STARTING)
+            if (targetApp && targetApp.get_state() != Shell.AppState.STARTING) {
                 this.stopAnimation();
+                this._maybeSetMenu();
+            }
             return;
         }
 
@@ -531,37 +545,72 @@ AppMenuButton.prototype = {
         this._iconBox.hide();
         this._label.setText('');
 
+        if (this._appMenuNotifyId)
+            this._targetApp.disconnect(this._appMenuNotifyId);
+        if (this._actionGroupNotifyId)
+            this._targetApp.disconnect(this._actionGroupNotifyId);
+        if (targetApp) {
+            this._appMenuNotifyId = targetApp.connect('notify::menu', Lang.bind(this, this._sync));
+            this._actionGroupNotifyId = targetApp.connect('notify::action-group', Lang.bind(this, this._sync));
+        } else {
+            this._appMenuNotifyId = 0;
+            this._actionGroupNotifyId = 0;
+        }
+
         this._targetApp = targetApp;
         let icon = targetApp.get_faded_icon(2 * PANEL_ICON_SIZE);
 
         this._label.setText(targetApp.get_name());
-        // TODO - _quit() doesn't really work on apps in state STARTING yet
-        this._quitMenu.label.set_text(_("Quit %s").format(targetApp.get_name()));
+        this.setName(targetApp.get_name());
 
         this._iconBox.set_child(icon);
         this._iconBox.show();
 
         if (targetApp.get_state() == Shell.AppState.STARTING)
             this.startAnimation();
+        else
+            this._maybeSetMenu();
 
         this.emit('changed');
+    },
+
+    _maybeSetMenu: function() {
+        let menu;
+
+        if (this._targetApp.action_group && this._targetApp.menu) {
+            if (this.menu instanceof PopupMenu.RemoteMenu &&
+                this.menu.actionGroup == this._targetApp.action_group)
+                return;
+
+            menu = new PopupMenu.RemoteMenu(this.actor, this._targetApp.menu, this._targetApp.action_group);
+        } else {
+            if (this.menu && !(this.menu instanceof PopupMenu.RemoteMenu))
+                return;
+
+            // fallback to older menu
+            menu = new PopupMenu.PopupMenu(this.actor, 0.0, St.Side.TOP, 0);
+            menu.addAction(_("Quit"), Lang.bind(this, function() {
+                this._targetApp.request_quit();
+            }));
+        }
+
+        this.setMenu(menu);
+        this._menuManager.addMenu(menu);
     }
-};
+});
 
 Signals.addSignalMethods(AppMenuButton.prototype);
 
 // Activities button. Because everything else in the top bar is a
 // PanelMenu.Button, it simplifies some things to make this be one too.
 // We just hack it up to not actually have a menu attached to it.
-function ActivitiesButton() {
-    this._init.apply(this, arguments);
-}
-
-ActivitiesButton.prototype = {
-    __proto__: PanelMenu.Button.prototype,
+const ActivitiesButton = new Lang.Class({
+    Name: 'ActivitiesButton',
+    Extends: PanelMenu.Button,
 
     _init: function() {
-        PanelMenu.Button.prototype._init.call(this, 0.0);
+        this.parent(0.0);
+        this.actor.accessible_role = Atk.Role.TOGGLE_BUTTON;
 
         let container = new Shell.GenericContainer();
         container.connect('get-preferred-width', Lang.bind(this, this._containerGetPreferredWidth));
@@ -569,12 +618,13 @@ ActivitiesButton.prototype = {
         container.connect('allocate', Lang.bind(this, this._containerAllocate));
         this.actor.add_actor(container);
         this.actor.name = 'panelActivities';
-		this.actor.style_class = 'panelActivitiesHover';
 
         /* Translators: If there is no suitable word for "Activities"
            in your language, you can use the word for "Overview". */
         this._label = new St.Label({ text: _("Activities") });
         container.add_actor(this._label);
+
+        this.actor.label_actor = this._label;
 
         this._hotCorner = new Layout.HotCorner();
         container.add_actor(this._hotCorner.actor);
@@ -591,10 +641,12 @@ ActivitiesButton.prototype = {
         Main.overview.connect('showing', Lang.bind(this, function() {
             this.actor.add_style_pseudo_class('overview');
             this._escapeMenuGrab();
+            this.actor.add_accessible_state (Atk.StateType.CHECKED);
         }));
         Main.overview.connect('hiding', Lang.bind(this, function() {
             this.actor.remove_style_pseudo_class('overview');
             this._escapeMenuGrab();
+            this.actor.remove_accessible_state (Atk.StateType.CHECKED);
         }));
 
         this._xdndTimeOut = 0;
@@ -616,7 +668,7 @@ ActivitiesButton.prototype = {
         let primary = Main.layoutManager.primaryMonitor;
         let hotBox = new Clutter.ActorBox();
         let ok, x, y;
-        if (actor.get_direction() == St.TextDirection.LTR) {
+        if (actor.get_text_direction() == Clutter.TextDirection.LTR) {
             [ok, x, y] = actor.transform_stage_point(primary.x, primary.y)
         } else {
             [ok, x, y] = actor.transform_stage_point(primary.x + primary.width, primary.y);
@@ -633,12 +685,14 @@ ActivitiesButton.prototype = {
 
     handleDragOver: function(source, actor, x, y, time) {
         if (source != Main.xdndHandler)
-            return;
+            return DND.DragMotionResult.CONTINUE;
 
         if (this._xdndTimeOut != 0)
             Mainloop.source_remove(this._xdndTimeOut);
         this._xdndTimeOut = Mainloop.timeout_add(BUTTON_DND_ACTIVATION_TIMEOUT,
                                                  Lang.bind(this, this._xdndShowOverview, actor));
+
+        return DND.DragMotionResult.CONTINUE;
     },
 
     _escapeMenuGrab: function() {
@@ -699,13 +753,11 @@ ActivitiesButton.prototype = {
         Mainloop.source_remove(this._xdndTimeOut);
         this._xdndTimeOut = 0;
     }
-};
+});
 
-function PanelCorner(panel, side) {
-    this._init(panel, side);
-}
+const PanelCorner = new Lang.Class({
+    Name: 'PanelCorner',
 
-PanelCorner.prototype = {
     _init: function(box, side) {
         this._side = side;
 
@@ -770,7 +822,7 @@ PanelCorner.prototype = {
 
         let rtlAwareContainer = this._box instanceof St.BoxLayout;
         if (rtlAwareContainer &&
-            this._box.get_direction() == St.TextDirection.RTL) {
+            this._box.get_text_direction() == Clutter.TextDirection.RTL) {
             if (this._side == St.Side.LEFT)
                 side = St.Side.RIGHT;
             else if (this._side == St.Side.RIGHT)
@@ -816,12 +868,10 @@ PanelCorner.prototype = {
         let node = this.actor.get_theme_node();
 
         let cornerRadius = node.get_length("-panel-corner-radius");
-        let innerBorderWidth = node.get_length('-panel-corner-inner-border-width');
-        let outerBorderWidth = node.get_length('-panel-corner-outer-border-width');
+        let borderWidth = node.get_length('-panel-corner-border-width');
 
         let backgroundColor = node.get_color('-panel-corner-background-color');
-        let innerBorderColor = node.get_color('-panel-corner-inner-border-color');
-        let outerBorderColor = node.get_color('-panel-corner-outer-border-color');
+        let borderColor = node.get_color('-panel-corner-border-color');
 
         let cr = this.actor.get_context();
         cr.setOperator(Cairo.Operator.SOURCE);
@@ -829,40 +879,23 @@ PanelCorner.prototype = {
         cr.moveTo(0, 0);
         if (this._side == St.Side.LEFT)
             cr.arc(cornerRadius,
-                   innerBorderWidth + cornerRadius,
+                   borderWidth + cornerRadius,
                    cornerRadius, Math.PI, 3 * Math.PI / 2);
         else
             cr.arc(0,
-                   innerBorderWidth + cornerRadius,
+                   borderWidth + cornerRadius,
                    cornerRadius, 3 * Math.PI / 2, 2 * Math.PI);
         cr.lineTo(cornerRadius, 0);
         cr.closePath();
 
         let savedPath = cr.copyPath();
 
-        let over = _over(innerBorderColor,
-                         _over(outerBorderColor, backgroundColor));
-        Clutter.cairo_set_source_color(cr, over);
-        cr.fill();
-
         let xOffsetDirection = this._side == St.Side.LEFT ? -1 : 1;
-        let offset = outerBorderWidth;
-        over = _over(innerBorderColor, backgroundColor);
+        let over = _over(borderColor, backgroundColor);
         Clutter.cairo_set_source_color(cr, over);
-
-        cr.save();
-        cr.translate(xOffsetDirection * offset, - offset);
-        cr.appendPath(savedPath);
-        cr.fill();
-        cr.restore();
-
-        if (this._side == St.Side.LEFT)
-            cr.rectangle(cornerRadius - offset, 0, offset, outerBorderWidth);
-        else
-            cr.rectangle(0, 0, offset, outerBorderWidth);
         cr.fill();
 
-        offset = innerBorderWidth;
+        let offset = borderWidth;
         Clutter.cairo_set_source_color(cr, backgroundColor);
 
         cr.save();
@@ -876,19 +909,17 @@ PanelCorner.prototype = {
         let node = this.actor.get_theme_node();
 
         let cornerRadius = node.get_length("-panel-corner-radius");
-        let innerBorderWidth = node.get_length('-panel-corner-inner-border-width');
+        let borderWidth = node.get_length('-panel-corner-border-width');
 
-        this.actor.set_size(cornerRadius, innerBorderWidth + cornerRadius);
-        this.actor.set_anchor_point(0, innerBorderWidth);
+        this.actor.set_size(cornerRadius, borderWidth + cornerRadius);
+        this.actor.set_anchor_point(0, borderWidth);
     }
-};
+});
 
 
-function Panel() {
-    this._init();
-}
+const Panel = new Lang.Class({
+    Name: 'Panel',
 
-Panel.prototype = {
     _init : function() {
         this.actor = new Shell.GenericContainer({ name: 'panel',
                                                   reactive: true });
@@ -912,14 +943,14 @@ Panel.prototype = {
         this._rightBox = new St.BoxLayout({ name: 'panelRight' });
         this.actor.add_actor(this._rightBox);
 
-        if (this.actor.get_direction() == St.TextDirection.RTL)
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL)
             this._leftCorner = new PanelCorner(this._rightBox, St.Side.LEFT);
         else
             this._leftCorner = new PanelCorner(this._leftBox, St.Side.LEFT);
 
         this.actor.add_actor(this._leftCorner.actor);
 
-        if (this.actor.get_direction() == St.TextDirection.RTL)
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL)
             this._rightCorner = new PanelCorner(this._leftBox, St.Side.RIGHT);
         else
             this._rightCorner = new PanelCorner(this._rightBox, St.Side.RIGHT);
@@ -928,6 +959,7 @@ Panel.prototype = {
         this.actor.connect('get-preferred-width', Lang.bind(this, this._getPreferredWidth));
         this.actor.connect('get-preferred-height', Lang.bind(this, this._getPreferredHeight));
         this.actor.connect('allocate', Lang.bind(this, this._allocate));
+        this.actor.connect('button-press-event', Lang.bind(this, this._onButtonPress));
 
         /* Button on the left side of the panel. */
         if (global.session_type == Shell.SessionType.USER) {
@@ -939,9 +971,8 @@ Panel.prototype = {
             // more cleanly with the rest of the panel
             this._menus.addMenu(this._activitiesButton.menu);
 
-            this._appMenu = new AppMenuButton();
+            this._appMenu = new AppMenuButton(this._menus);
             this._leftBox.add(this._appMenu.actor);
-            this._menus.addMenu(this._appMenu.menu);
         }
 
         /* center */
@@ -996,7 +1027,7 @@ Panel.prototype = {
 
         childBox.y1 = 0;
         childBox.y2 = allocHeight;
-        if (this.actor.get_direction() == St.TextDirection.RTL) {
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL) {
             childBox.x1 = allocWidth - Math.min(Math.floor(sideWidth),
                                                 leftNaturalWidth);
             childBox.x2 = allocWidth;
@@ -1015,7 +1046,7 @@ Panel.prototype = {
 
         childBox.y1 = 0;
         childBox.y2 = allocHeight;
-        if (this.actor.get_direction() == St.TextDirection.RTL) {
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL) {
             childBox.x1 = 0;
             childBox.x2 = Math.min(Math.floor(sideWidth),
                                    rightNaturalWidth);
@@ -1043,6 +1074,54 @@ Panel.prototype = {
         this._rightCorner.actor.allocate(childBox, flags);
     },
 
+    _onButtonPress: function(actor, event) {
+        if (event.get_source() != actor)
+            return false;
+
+        let button = event.get_button();
+        if (button != 1)
+            return false;
+
+        let focusWindow = global.display.focus_window;
+        if (!focusWindow)
+            return false;
+
+        let dragWindow = focusWindow.is_attached_dialog() ? focusWindow.get_transient_for()
+                                                          : focusWindow;
+        if (!dragWindow)
+            return false;
+
+        let rect = dragWindow.get_outer_rect();
+        let [stageX, stageY] = event.get_coords();
+
+        let allowDrag = dragWindow.maximized_vertically &&
+                        stageX > rect.x && stageX < rect.x + rect.width;
+
+        if (!allowDrag)
+            return false;
+
+        global.display.begin_grab_op(global.screen,
+                                     dragWindow,
+                                     Meta.GrabOp.MOVING,
+                                     false, /* pointer grab */
+                                     true, /* frame action */
+                                     button,
+                                     event.get_state(),
+                                     event.get_time(),
+                                     stageX, stageY);
+
+        return true;
+    },
+
+    openAppMenu: function() {
+        let menu = this._appMenu.menu;
+        if (Main.overview.visible || menu.isOpen)
+          return;
+
+        menu.open();
+        menu.actor.navigate_focus(null, Gtk.DirectionType.TAB_FORWARD, false);
+    },
+
     startStatusArea: function() {
         for (let i = 0; i < this._status_area_order.length; i++) {
             let role = this._status_area_order[i];
@@ -1063,13 +1142,13 @@ Panel.prototype = {
         for (i = children.length - 1; i >= 0; i--) {
             let rolePosition = children[i]._rolePosition;
             if (position > rolePosition) {
-                this._rightBox.insert_actor(actor, i + 1);
+                this._rightBox.insert_child_at_index(actor, i + 1);
                 break;
             }
         }
         if (i == -1) {
             // If we didn't find a position, we must be first
-            this._rightBox.insert_actor(actor, 0);
+            this._rightBox.insert_child_at_index(actor, 0);
         }
         actor._rolePosition = position;
     },
@@ -1115,5 +1194,4 @@ Panel.prototype = {
         if (box && box._delegate instanceof PanelMenu.ButtonBox)
             box.destroy();
     },
-
-};
+});

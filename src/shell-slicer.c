@@ -81,9 +81,7 @@ shell_slicer_allocate (ClutterActor           *self,
 {
   ClutterActor *child;
 
-  /* Chain up directly to ClutterActor to set actor->allocation.  We explicitly skip our parent class
-   * StBin here because we want to override the allocate function. */
-  CLUTTER_ACTOR_CLASS (g_type_class_peek (clutter_actor_get_type ()))->allocate (self, box, flags);
+  clutter_actor_set_allocation (self, box, flags);
 
   child = st_bin_get_child (ST_BIN (self));
   if (child)
@@ -106,7 +104,7 @@ shell_slicer_paint_child (ShellSlicer *self)
     return;
 
   st_bin_get_alignment (ST_BIN (self), &x_align, &y_align);
-  _st_get_align_factors (ST_WIDGET (self), x_align, y_align,
+  _st_get_align_factors (x_align, y_align,
                          &x_align_factor, &y_align_factor);
 
   clutter_actor_get_allocation_box (CLUTTER_ACTOR (self), &self_box);
@@ -134,8 +132,7 @@ shell_slicer_paint_child (ShellSlicer *self)
 static void
 shell_slicer_paint (ClutterActor *self)
 {
-  /* StWidget paints CSS elements */
-  CLUTTER_ACTOR_CLASS (g_type_class_peek (st_widget_get_type ()))->paint (self);
+  st_widget_paint_background (ST_WIDGET (self));
 
   shell_slicer_paint_child (SHELL_SLICER (self));
 }

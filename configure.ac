@@ -1,5 +1,5 @@
 AC_PREREQ(2.63)
-AC_INIT([gnome-shell],[3.2.2.1],[https://bugzilla.gnome.org/enter_bug.cgi?product=gnome-shell],[gnome-shell])
+AC_INIT([gnome-shell],[3.4.1],[https://bugzilla.gnome.org/enter_bug.cgi?product=gnome-shell],[gnome-shell])
 
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_SRCDIR([src/shell-global.c])
@@ -26,19 +26,12 @@ LT_INIT([disable-static])
 # i18n
 IT_PROG_INTLTOOL([0.40])
 
-AM_GNU_GETTEXT([external])
-AM_GNU_GETTEXT_VERSION([0.17])
-
 GETTEXT_PACKAGE=gnome-shell
 AC_SUBST(GETTEXT_PACKAGE)
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE, "$GETTEXT_PACKAGE",
                    [The prefix for our gettext translation domains.])
 
 PKG_PROG_PKG_CONFIG([0.22])
-
-# GConf stuff
-AC_PATH_PROG(GCONFTOOL, gconftool-2, no)
-AM_GCONF_SOURCE_2
 
 GLIB_GSETTINGS
 
@@ -64,29 +57,29 @@ fi
 
 AM_CONDITIONAL(BUILD_RECORDER, $build_recorder)
 
-CLUTTER_MIN_VERSION=1.7.5
+CLUTTER_MIN_VERSION=1.9.16
 GOBJECT_INTROSPECTION_MIN_VERSION=0.10.1
 GJS_MIN_VERSION=1.29.18
-MUTTER_MIN_VERSION=3.2.1
+MUTTER_MIN_VERSION=3.4.1
 FOLKS_MIN_VERSION=0.5.2
-GTK_MIN_VERSION=3.0.0
-GIO_MIN_VERSION=2.29.10
+GTK_MIN_VERSION=3.3.9
+GIO_MIN_VERSION=2.31.6
 LIBECAL_MIN_VERSION=2.32.0
 LIBEDATASERVER_MIN_VERSION=1.2.0
 LIBEDATASERVERUI_MIN_VERSION=2.91.6
-TELEPATHY_GLIB_MIN_VERSION=0.15.5
+TELEPATHY_GLIB_MIN_VERSION=0.17.5
 TELEPATHY_LOGGER_MIN_VERSION=0.2.4
 POLKIT_MIN_VERSION=0.100
 STARTUP_NOTIFICATION_MIN_VERSION=0.11
 
 # Collect more than 20 libraries for a prize!
-PKG_CHECK_MODULES(GNOME_SHELL, gio-2.0 >= $GIO_MIN_VERSION
-                               gio-unix-2.0 dbus-glib-1 libxml-2.0
+PKG_CHECK_MODULES(GNOME_SHELL, gio-unix-2.0 >= $GIO_MIN_VERSION
+			       libxml-2.0
                                gtk+-3.0 >= $GTK_MIN_VERSION
                                folks >= $FOLKS_MIN_VERSION
                                libmutter >= $MUTTER_MIN_VERSION
                                gjs-internals-1.0 >= $GJS_MIN_VERSION
-			       libgnome-menu-3.0 $recorder_modules gconf-2.0
+			       libgnome-menu-3.0 $recorder_modules
                                gdk-x11-3.0 libsoup-2.4
 			       clutter-x11-1.0 >= $CLUTTER_MIN_VERSION
 			       clutter-glx-1.0 >= $CLUTTER_MIN_VERSION
@@ -120,8 +113,8 @@ AC_CHECK_FUNCS(JS_NewGlobalObject XFixesCreatePointerBarrier)
 CFLAGS=$saved_CFLAGS
 LIBS=$saved_LIBS
 
-PKG_CHECK_MODULES(ST, clutter-1.0 gtk+-3.0 libcroco-0.6 >= 0.6.2 gnome-desktop-3.0 >= 2.90.0 x11)
-PKG_CHECK_MODULES(GDMUSER, dbus-glib-1 gtk+-3.0)
+PKG_CHECK_MODULES(GNOME_SHELL_JS, gio-2.0 gjs-internals-1.0 >= $GJS_MIN_VERSION)
+PKG_CHECK_MODULES(ST, clutter-1.0 gtk+-3.0 libcroco-0.6 >= 0.6.2 x11)
 PKG_CHECK_MODULES(TRAY, gtk+-3.0)
 PKG_CHECK_MODULES(GVC, libpulse libpulse-mainloop-glib gobject-2.0)
 PKG_CHECK_MODULES(DESKTOP_SCHEMAS, gsettings-desktop-schemas >= 0.1.7)
@@ -131,6 +124,7 @@ PKG_CHECK_EXISTS([gnome-bluetooth-1.0 >= 3.1.0],
         [BLUETOOTH_DIR=`$PKG_CONFIG --variable=applet_libdir gnome-bluetooth-1.0`
 	 BLUETOOTH_LIBS=`$PKG_CONFIG --variable=applet_libs gnome-bluetooth-1.0`
 	 AC_SUBST([BLUETOOTH_LIBS],["$BLUETOOTH_LIBS"])
+	 AC_SUBST([BLUETOOTH_DIR],["$BLUETOOTH_DIR"])
 	 AC_DEFINE_UNQUOTED([BLUETOOTH_DIR],["$BLUETOOTH_DIR"],[Path to installed GnomeBluetooth typelib and library])
 	 AC_DEFINE([HAVE_BLUETOOTH],[1],[Define if you have libgnome-bluetooth-applet])
 	 AC_SUBST([HAVE_BLUETOOTH],[1])
@@ -142,6 +136,33 @@ PKG_CHECK_EXISTS([gnome-bluetooth-1.0 >= 3.1.0],
 PKG_CHECK_MODULES(CALENDAR_SERVER, libecal-1.2 >= $LIBECAL_MIN_VERSION libedataserver-1.2 >= $LIBEDATASERVER_MIN_VERSION libedataserverui-3.0 >= $LIBEDATASERVERUI_MIN_VERSION gio-2.0)
 AC_SUBST(CALENDAR_SERVER_CFLAGS)
 AC_SUBST(CALENDAR_SERVER_LIBS)
+
+AC_ARG_WITH(systemd,
+            AS_HELP_STRING([--with-systemd],
+                           [Add systemd support]),
+            [with_systemd=$withval], [with_systemd=auto])
+
+PKG_CHECK_MODULES(SYSTEMD,
+                  [libsystemd-login libsystemd-daemon],
+                  [have_systemd=yes], [have_systemd=no])
+
+if test "x$with_systemd" = "xauto" ; then
+        if test x$have_systemd = xno ; then
+                use_systemd=no
+        else
+                use_systemd=yes
+        fi
+else
+        use_systemd=$with_systemd
+fi
+
+if test "x$use_systemd" = "xyes"; then
+        if test "x$have_systemd" = "xno"; then
+                AC_MSG_ERROR([Systemd support explicitly required, but systemd not found])
+        fi
+
+        AC_DEFINE(WITH_SYSTEMD, 1, [systemd support])
+fi
 
 MUTTER_GIR_DIR=`$PKG_CONFIG --variable=girdir libmutter`
 MUTTER_TYPELIB_DIR=`$PKG_CONFIG --variable=typelibdir libmutter`
@@ -179,6 +200,8 @@ AC_SUBST(GIRDIR)
 TYPELIBDIR="$($PKG_CONFIG --variable=typelibdir gobject-introspection-1.0)"
 AC_SUBST(TYPELIBDIR)
 
+GTK_DOC_CHECK([1.15], [--flavour no-tmpl])
+
 # Stay command-line compatible with the gnome-common configure option. Here
 # minimum/yes/maximum are the same, however.
 AC_ARG_ENABLE(compile_warnings,
@@ -199,7 +222,7 @@ if test "$enable_compile_warnings" != no ; then
     if test "$enable_compile_warnings" = error ; then
       case " $CFLAGS " in
       *[\ \	]-Werror[\ \	]*) ;;
-      *) CFLAGS="$CFLAGS -Werror" ;;
+      *) CFLAGS="$CFLAGS -Werror -Wno-error=deprecated-declarations" ;;
       esac
     fi
   fi
@@ -207,7 +230,7 @@ fi
 changequote([,])dnl
 
 AC_ARG_ENABLE(jhbuild-wrapper-script,
-  AS_HELP_STRING([--jhbuild-wrapper-script=yes],[Make "gnome-shell" script work for jhbuild]),,enable_jhbuild_wrapper_script=no)
+  AS_HELP_STRING([--enable-jhbuild-wrapper-script],[Make "gnome-shell" script work for jhbuild]),,enable_jhbuild_wrapper_script=no)
 AM_CONDITIONAL(USE_JHBUILD_WRAPPER_SCRIPT, test "x$enable_jhbuild_wrapper_script" = xyes)
 
 AC_MSG_CHECKING([location of system Certificate Authority list])
@@ -241,8 +264,13 @@ AC_ARG_VAR([BROWSER_PLUGIN_DIR],[Where to install the plugin to])
 AC_CONFIG_FILES([
   Makefile
   data/Makefile
+  docs/Makefile
+  docs/reference/Makefile
+  docs/reference/shell/Makefile
+  docs/reference/shell/shell-docs.sgml
+  docs/reference/st/Makefile
+  docs/reference/st/st-docs.sgml
   js/Makefile
-  js/misc/config.js
   src/Makefile
   browser-plugin/Makefile
   tests/Makefile

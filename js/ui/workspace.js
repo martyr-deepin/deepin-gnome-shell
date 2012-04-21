@@ -1,7 +1,7 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Clutter = imports.gi.Clutter;
-const GConf = imports.gi.GConf;
+const Gio = imports.gi.Gio;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const Meta = imports.gi.Meta;
@@ -23,12 +23,15 @@ const WINDOW_DND_SIZE = 256;
 
 const SCROLL_SCALE_AMOUNT = 100 / 5;
 
+const WINDOW_CLONE_MAXIMUM_SCALE = 0.7;
+
 const LIGHTBOX_FADE_TIME = 0.1;
 const CLOSE_BUTTON_FADE_TIME = 0.1;
 
 const DRAGGING_WINDOW_OPACITY = 100;
 
-const BUTTON_LAYOUT_KEY = '/desktop/gnome/shell/windows/button_layout';
+const BUTTON_LAYOUT_SCHEMA = 'org.gnome.shell.overrides';
+const BUTTON_LAYOUT_KEY = 'button-layout';
 
 // Define a layout scheme for small window counts. For larger
 // counts we fall back to an algorithm. We need more schemes here
@@ -55,11 +58,13 @@ function _clamp(value, min, max) {
 }
 
 
-function ScaledPoint(x, y, scaleX, scaleY) {
-    [this.x, this.y, this.scaleX, this.scaleY] = arguments;
-}
+const ScaledPoint = new Lang.Class({
+    Name: 'ScaledPoint',
 
-ScaledPoint.prototype = {
+    _init: function(x, y, scaleX, scaleY) {
+        [this.x, this.y, this.scaleX, this.scaleY] = arguments;
+    },
+
     getPosition : function() {
         return [this.x, this.y];
     },
@@ -85,18 +90,17 @@ ScaledPoint.prototype = {
         return [_interpolate(this.scaleX, other.scaleX, step),
                 _interpolate(this.scaleY, other.scaleY, step)];
     }
-};
+});
 
 
-function WindowClone(realWindow) {
-    this._init(realWindow);
-}
+const WindowClone = new Lang.Class({
+    Name: 'WindowClone',
 
-WindowClone.prototype = {
-    _init : function(realWindow) {
+    _init : function(realWindow, workspace) {
         this.realWindow = realWindow;
         this.metaWindow = realWindow.meta_window;
         this.metaWindow._delegate = this;
+        this._workspace = workspace;
 
         let [borderX, borderY] = this._getInvisibleBorderPadding();
         this._windowClone = new Clutter.Clone({ source: realWindow.get_texture(),
@@ -366,6 +370,7 @@ WindowClone.prototype = {
                     if (this._selected)
                         return;
                     let [x, y] = action.get_coords();
+                    action.release();
                     this._draggable.startDrag(x, y, global.get_current_time());
                 }));
         }
@@ -382,19 +387,12 @@ WindowClone.prototype = {
         this.emit('drag-begin');
     },
 
-    _getWorkspaceActor : function() {
-        let index = this.metaWindow.get_workspace().index();
-        return Main.overview.workspaces.getWorkspaceByIndex(index);
-    },
-
     handleDragOver : function(source, actor, x, y, time) {
-        let workspace = this._getWorkspaceActor();
-        return workspace.handleDragOver(source, actor, x, y, time);
+        return this._workspace.handleDragOver(source, actor, x, y, time);
     },
 
     acceptDrop : function(source, actor, x, y, time) {
-        let workspace = this._getWorkspaceActor();
-        workspace.acceptDrop(source, actor, x, y, time);
+        this._workspace.acceptDrop(source, actor, x, y, time);
     },
 
     _onDragCancelled : function (draggable, time) {
@@ -417,7 +415,7 @@ WindowClone.prototype = {
 
         this.emit('drag-end');
     }
-};
+});
 Signals.addSignalMethods(WindowClone.prototype);
 
 
@@ -426,11 +424,9 @@ Signals.addSignalMethods(WindowClone.prototype);
  * @parentActor: The actor which will be the parent of all overlay items
  *               such as app icon and window caption
  */
-function WindowOverlay(windowClone, parentActor) {
-    this._init(windowClone, parentActor);
-}
+const WindowOverlay = new Lang.Class({
+    Name: 'WindowOverlay',
 
-WindowOverlay.prototype = {
     _init : function(windowClone, parentActor) {
         let metaWindow = windowClone.metaWindow;
 
@@ -495,6 +491,9 @@ WindowOverlay.prototype = {
     },
 
     fadeIn: function() {
+        if (!this._hidden)
+            return;
+
         this.show();
         this.title.opacity = 0;
         this._parentActor.raise_top();
@@ -523,13 +522,13 @@ WindowOverlay.prototype = {
     // get_transformed_position() and get_transformed_size(),
     // as windowClone might be moving.
     // See Workspace._showWindowOverlay
-    updatePositions: function(cloneX, cloneY, cloneWidth, cloneHeight) {
+    updatePositions: function(cloneX, cloneY, cloneWidth, cloneHeight, animate) {
         let button = this.closeButton;
         let title = this.title;
 
-        let gconf = GConf.Client.get_default();
-        let layout = gconf.get_string(BUTTON_LAYOUT_KEY);
-        let rtl = (St.Widget.get_default_direction() == St.TextDirection.RTL);
+        let settings = new Gio.Settings({ schema: BUTTON_LAYOUT_SCHEMA });
+        let layout = settings.get_string(BUTTON_LAYOUT_KEY);
+        let rtl = Clutter.get_default_text_direction() == Clutter.TextDirection.RTL;
 
         let split = layout.split(":");
         let side;
@@ -545,15 +544,34 @@ WindowOverlay.prototype = {
         else
             buttonX = cloneX + (cloneWidth - button._overlap);
 
-        button.set_position(Math.floor(buttonX), Math.floor(buttonY));
+        if (animate)
+            this._animateOverlayActor(button, Math.floor(buttonX), Math.floor(buttonY), button.width);
+        else
+            button.set_position(Math.floor(buttonX), Math.floor(buttonY));
 
         if (!title.fullWidth)
             title.fullWidth = title.width;
-        title.width = Math.min(title.fullWidth, cloneWidth);
+        let titleWidth = Math.min(title.fullWidth, cloneWidth);
 
-        let titleX = cloneX + (cloneWidth - title.width) / 2;
+        let titleX = cloneX + (cloneWidth - titleWidth) / 2;
         let titleY = cloneY + cloneHeight + title._spacing;
-        title.set_position(Math.floor(titleX), Math.floor(titleY));
+
+        if (animate)
+            this._animateOverlayActor(title, Math.floor(titleX), Math.floor(titleY), titleWidth);
+        else {
+            title.width = titleWidth;
+            title.set_position(Math.floor(titleX), Math.floor(titleY));
+        }
+    },
+
+    _animateOverlayActor: function(actor, x, y, width) {
+        Tweener.addTween(actor,
+                         { x: x,
+                           y: y,
+                           width: width,
+                           time: Overview.ANIMATION_TIME,
+                           transition: 'easeOutQuad'
+                         });
     },
 
     _closeWindow: function(actor) {
@@ -641,7 +659,7 @@ WindowOverlay.prototype = {
 
         this._parentActor.queue_relayout();
     }
-};
+});
 Signals.addSignalMethods(WindowOverlay.prototype);
 
 const WindowPositionFlags = {
@@ -652,11 +670,9 @@ const WindowPositionFlags = {
 /**
  * @metaWorkspace: a #Meta.Workspace, or null
  */
-function Workspace(metaWorkspace, monitorIndex) {
-    this._init(metaWorkspace, monitorIndex);
-}
+const Workspace = new Lang.Class({
+    Name: 'Workspace',
 
-Workspace.prototype = {
     _init : function(metaWorkspace, monitorIndex) {
         // When dragging a window, we use this slot for reserve space.
         this._reservedSlot = null;
@@ -951,7 +967,7 @@ Workspace.prototype = {
 
         let scale = Math.min((width - buttonOuterWidth) / rect.width,
                              (height - buttonOuterHeight - captionHeight) / rect.height,
-                             1.0);
+                             WINDOW_CLONE_MAXIMUM_SCALE);
 
         x = Math.floor(x + (width - scale * rect.width) / 2);
 
@@ -1020,7 +1036,7 @@ Workspace.prototype = {
 
             let [x, y, scale] = this._computeWindowLayout(metaWindow, slot);
 
-            if (overlay)
+            if (overlay && initialPositioning)
                 overlay.hide();
             if (animate && isOnCurrentWorkspace) {
                 if (!metaWindow.showing_on_its_workspace()) {
@@ -1043,20 +1059,11 @@ Workspace.prototype = {
                                       });
                 }
 
-                Tweener.addTween(clone.actor,
-                                 { x: x,
-                                   y: y,
-                                   scale_x: scale,
-                                   scale_y: scale,
-                                   time: Overview.ANIMATION_TIME,
-                                   transition: 'easeOutQuad',
-                                   onComplete: Lang.bind(this, function() {
-                                      this._showWindowOverlay(clone, overlay, true);
-                                   })
-                                 });
+                this._animateClone(clone, overlay, x, y, scale, initialPositioning);
             } else {
                 clone.actor.set_position(x, y);
                 clone.actor.set_scale(scale, scale);
+                this._updateWindowOverlayPositions(clone, overlay, x, y, scale, false);
                 this._showWindowOverlay(clone, overlay, isOnCurrentWorkspace);
             }
         }
@@ -1078,23 +1085,35 @@ Workspace.prototype = {
         }
     },
 
+    _animateClone: function(clone, overlay, x, y, scale, initialPositioning) {
+        Tweener.addTween(clone.actor,
+                                 { x: x,
+                                   y: y,
+                                   scale_x: scale,
+                                   scale_y: scale,
+                                   time: Overview.ANIMATION_TIME,
+                                   transition: 'easeOutQuad',
+                                   onComplete: Lang.bind(this, function() {
+                                         this._showWindowOverlay(clone, overlay, true);
+                                   })
+                                 });
+
+        this._updateWindowOverlayPositions(clone, overlay, x, y, scale, true);
+    },
+
+    _updateWindowOverlayPositions: function(clone, overlay, x, y, scale, animate) {
+        let [cloneWidth, cloneHeight] = clone.actor.get_size();
+        cloneWidth = scale * cloneWidth;
+        cloneHeight = scale * cloneHeight;
+        if (overlay)
+            overlay.updatePositions(x, y, cloneWidth, cloneHeight, animate);
+    },
+
     _showWindowOverlay: function(clone, overlay, fade) {
         if (clone.inDrag)
             return;
 
-        // This is a little messy and complicated because when we
-        // start the fade-in we may not have done the final positioning
-        // of the workspaces. (Tweener doesn't necessarily finish
-        // all animations before calling onComplete callbacks.)
-        // So we need to manually compute where the window will
-        // be after the workspace animation finishes.
-        let [cloneX, cloneY] = clone.actor.get_position();
-        let [cloneWidth, cloneHeight] = clone.actor.get_size();
-        cloneWidth = clone.actor.scale_x * cloneWidth;
-        cloneHeight = clone.actor.scale_y * cloneHeight;
-
         if (overlay) {
-            overlay.updatePositions(cloneX, cloneY, cloneWidth, cloneHeight);
             if (fade)
                 overlay.fadeIn();
             else
@@ -1109,6 +1128,16 @@ Workspace.prototype = {
             let overlay = this._windowOverlays[i];
             this._showWindowOverlay(clone, overlay,
                                     this.metaWorkspace == null || this.metaWorkspace == currentWorkspace);
+        }
+    },
+
+    _hideAllOverlays: function() {
+        for (let i = 0; i < this._windows.length; i++) {
+            let clone = this._windows[i];
+            Tweener.removeTweens(clone.actor);
+            let overlay = this._windowOverlays[i];
+            if (overlay)
+                overlay.hide();
         }
     },
 
@@ -1129,20 +1158,14 @@ Workspace.prototype = {
             return true;
         }
 
+        let actorUnderPointer = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
+        for (let i = 0; i < this._windows.length; i++) {
+            if (this._windows[i].actor == actorUnderPointer)
+                return true;
+        }
+
         this.positionWindows(WindowPositionFlags.ANIMATE);
         return false;
-    },
-
-    showWindowsOverlays: function() {
-        if (this.leavingOverview)
-            return;
-
-        this._windowOverlaysGroup.show();
-        this._showAllOverlays();
-    },
-
-    hideWindowsOverlays: function() {
-        this._windowOverlaysGroup.hide();
     },
 
     _doRemoveWindow : function(metaWin) {
@@ -1298,7 +1321,7 @@ Workspace.prototype = {
 
         this.leavingOverview = true;
 
-        this.hideWindowsOverlays();
+        this._hideAllOverlays();
 
         if (this._repositionWindowsId > 0) {
             Mainloop.source_remove(this._repositionWindowsId);
@@ -1389,7 +1412,7 @@ Workspace.prototype = {
 
     // Create a clone of a (non-desktop) window and add it to the window list
     _addWindowClone : function(win) {
-        let clone = new WindowClone(win);
+        let clone = new WindowClone(win, this);
         let overlay = new WindowOverlay(clone, this._windowOverlaysGroup);
 
         clone.connect('selected',
@@ -1517,6 +1540,6 @@ Workspace.prototype = {
 
         return false;
     }
-};
+});
 
 Signals.addSignalMethods(Workspace.prototype);

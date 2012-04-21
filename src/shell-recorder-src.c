@@ -10,6 +10,7 @@ struct _ShellRecorderSrc
 {
   GstPushSrc parent;
 
+  GMutex mutex_data;
   GMutex *mutex;
 
   GstCaps *caps;
@@ -39,8 +40,11 @@ static void
 shell_recorder_src_init (ShellRecorderSrc      *src,
 			 ShellRecorderSrcClass *klass)
 {
+  gst_base_src_set_format (GST_BASE_SRC (src), GST_FORMAT_TIME);
+
   src->queue = g_async_queue_new ();
-  src->mutex = g_mutex_new ();
+  src->mutex = &src->mutex_data;
+  g_mutex_init (src->mutex);
 }
 
 static void
@@ -140,7 +144,7 @@ shell_recorder_src_finalize (GObject *object)
   shell_recorder_src_set_caps (src, NULL);
   g_async_queue_unref (src->queue);
 
-  g_mutex_free (src->mutex);
+  g_mutex_clear (src->mutex);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -280,6 +284,7 @@ plugin_init (GstPlugin *plugin)
 
 /**
  * shell_recorder_src_register:
+ *
  * Registers a plugin holding our single element to use privately in
  * this application. Can safely be called multiple times.
  */

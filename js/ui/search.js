@@ -23,15 +23,12 @@ const MatchType = {
     MULTIPLE_PREFIX: 4
 };
 
-function SearchResultDisplay(provider) {
-    this._init(provider);
-}
+const SearchResultDisplay = new Lang.Class({
+    Name: 'SearchResultDisplay',
 
-SearchResultDisplay.prototype = {
     _init: function(provider) {
         this.provider = provider;
         this.actor = null;
-        this.selectionIndex = -1;
     },
 
     /**
@@ -53,20 +50,10 @@ SearchResultDisplay.prototype = {
 
     /**
      * clear:
-     * Remove all results from this display and reset the selection index.
+     * Remove all results from this display.
      */
     clear: function() {
         this.actor.get_children().forEach(function (actor) { actor.destroy(); });
-        this.selectionIndex = -1;
-    },
-
-    /**
-     * getSelectionIndex:
-     *
-     * Returns the index of the selected actor, or -1 if none.
-     */
-    getSelectionIndex: function() {
-        return this.selectionIndex;
     },
 
     /**
@@ -77,26 +64,7 @@ SearchResultDisplay.prototype = {
     getVisibleResultCount: function() {
         throw new Error('Not implemented');
     },
-
-    /**
-     * selectIndex:
-     * @index: Integer index
-     *
-     * Move selection to the given index.
-     * Return true if successful, false if no more results
-     * available.
-     */
-    selectIndex: function() {
-        throw new Error('Not implemented');
-    },
-
-    /**
-     * Activate the currently selected search result.
-     */
-    activateSelected: function() {
-        throw new Error('Not implemented');
-    }
-};
+});
 
 /**
  * SearchProvider:
@@ -104,51 +72,19 @@ SearchResultDisplay.prototype = {
  * Subclass this object to add a new result type
  * to the search system, then call registerProvider()
  * in SearchSystem with an instance.
+ * By default, search is synchronous and uses the
+ * getInitialResultSet()/getSubsearchResultSet() methods.
+ * For asynchronous search, set the async property to true
+ * and implement getInitialResultSetAsync()/getSubsearchResultSetAsync()
+ * instead.
  */
-function SearchProvider(title) {
-    this._init(title);
-}
+const SearchProvider = new Lang.Class({
+    Name: 'SearchProvider',
 
-SearchProvider.prototype = {
     _init: function(title) {
         this.title = title;
         this.searchSystem = null;
-        this.searchAsync  = false;
-    },
-
-    _asyncCancelled: function() {
-    },
-
-    startAsync: function() {
-        this.searchAsync = true;
-    },
-
-    tryCancelAsync: function() {
-        if (!this.searchAsync)
-            return;
-        this._asyncCancelled();
-        this.searchAsync = false;
-    },
-
-    /**
-     * addItems:
-     * @items: an array of result identifier strings representing
-     * items which match the last given search terms.
-     *
-     * This should be used for something that requires a bit more
-     * logic; it's designed to be an asyncronous way to add a result
-     * to the current search.
-     */
-    addItems: function(items) {
-        if (!this.searchSystem)
-            throw new Error('Search provider not registered');
-
-        if (!items.length)
-            return;
-
-        this.tryCancelAsync();
-
-        this.searchSystem.addProviderItems(this, items);
+        this.async = false;
     },
 
     /**
@@ -177,6 +113,18 @@ SearchProvider.prototype = {
     },
 
     /**
+     * getInitialResultSetAsync:
+     * @terms: Array of search terms, treated as logical AND
+     *
+     * Like getInitialResultSet(), but the method should return immediately
+     * without a return value - use SearchSystem.pushResults() when the
+     * corresponding results are ready.
+     */
+    getInitialResultSetAsync: function(terms) {
+        throw new Error('Not implemented');
+    },
+
+    /**
      * getSubsearchResultSet:
      * @previousResults: Array of item identifiers
      * @newTerms: Updated search terms
@@ -194,14 +142,40 @@ SearchProvider.prototype = {
     },
 
     /**
-     * getResultMeta:
-     * @id: Result identifier string
+     * getSubsearchResultSetAsync:
+     * @previousResults: Array of item identifiers
+     * @newTerms: Updated search terms
      *
-     * Return an object with 'id', 'name', (both strings) and 'createIcon'
-     * (function(size) returning a Clutter.Texture) properties which describe
-     * the given search result.
+     * Like getSubsearchResultSet(), but the method should return immediately
+     * without a return value - use SearchSystem.pushResults() when the
+     * corresponding results are ready.
      */
-    getResultMeta: function(id) {
+    getSubsearchResultSetAsync: function(previousResults, newTerms) {
+        throw new Error('Not implemented');
+    },
+
+    /**
+     * getResultMetas:
+     * @ids: Result identifier strings
+     *
+     * Return an array of objects with 'id', 'name', (both strings) and
+     * 'createIcon' (function(size) returning a Clutter.Texture) properties
+     * with the same number of members as @ids
+     */
+    getResultMetas: function(ids) {
+        throw new Error('Not implemented');
+    },
+
+    /**
+     * getResultMetasAsync:
+     * @ids: Result identifier strings
+     * @callback: callback to pass the results to when ready
+     *
+     * Like getResultMetas(), but the method should return immediately
+     * without a return value - pass the results to the provided @callback
+     * when ready.
+     */
+    getResultMetasAsync: function(ids, callback) {
         throw new Error('Not implemented');
     },
 
@@ -243,14 +217,12 @@ SearchProvider.prototype = {
     activateResult: function(id) {
         throw new Error('Not implemented');
     }
-};
+});
 Signals.addSignalMethods(SearchProvider.prototype);
 
-function OpenSearchSystem() {
-    this._init();
-}
+const OpenSearchSystem = new Lang.Class({
+    Name: 'OpenSearchSystem',
 
-OpenSearchSystem.prototype = {
     _init: function() {
         this._providers = [];
         global.settings.connect('changed::' + DISABLED_OPEN_SEARCH_PROVIDERS_KEY, Lang.bind(this, this._refresh));
@@ -308,7 +280,7 @@ OpenSearchSystem.prototype = {
     },
 
     _addProvider: function(fileName) {
-        let path = global.datadir + '/search_providers/' + fileName;
+        let path = global.datadir + '/open-search-providers/' + fileName;
         let source = Shell.get_file_contents_utf8_sync(path);
         let [success, name, url, langs, icon_uri] = Shell.parse_search_provider(source);
         let provider ={ name: name,
@@ -325,7 +297,7 @@ OpenSearchSystem.prototype = {
     _refresh: function() {
         this._providers = [];
         let names = global.settings.get_strv(DISABLED_OPEN_SEARCH_PROVIDERS_KEY);
-        let file = Gio.file_new_for_path(global.datadir + '/search_providers');
+        let file = Gio.file_new_for_path(global.datadir + '/open-search-providers');
         FileUtils.listDirAsync(file, Lang.bind(this, function(files) {
             for (let i = 0; i < files.length; i++) {
                 let enabled = true;
@@ -338,14 +310,12 @@ OpenSearchSystem.prototype = {
             }
         }));
     }
-}
+});
 Signals.addSignalMethods(OpenSearchSystem.prototype);
 
-function SearchSystem() {
-    this._init();
-}
+const SearchSystem = new Lang.Class({
+    Name: 'SearchSystem',
 
-SearchSystem.prototype = {
     _init: function() {
         this._providers = [];
         this.reset();
@@ -377,8 +347,13 @@ SearchSystem.prototype = {
         this._previousResults = [];
     },
 
-    addProviderItems: function(provider, items) {
-        this.emit('search-updated', provider, items);
+    pushResults: function(provider, results) {
+        let i = this._providers.indexOf(provider);
+        if (i == -1)
+            return;
+
+        this._previousResults[i] = [provider, results];
+        this.emit('search-updated', this._previousResults[i]);
     },
 
     updateSearch: function(searchString) {
@@ -408,10 +383,14 @@ SearchSystem.prototype = {
         if (isSubSearch) {
             for (let i = 0; i < this._providers.length; i++) {
                 let [provider, previousResults] = this._previousResults[i];
-                provider.tryCancelAsync();
                 try {
-                    let providerResults = provider.getSubsearchResultSet(previousResults, terms);
-                    results.push([provider, providerResults]);
+                    if (provider.async) {
+                        provider.getSubsearchResultSetAsync(previousResults, terms);
+                        results.push([provider, []]);
+                    } else {
+                        let providerResults = provider.getSubsearchResultSet(previousResults, terms);
+                        results.push([provider, providerResults]);
+                    }
                 } catch (error) {
                     global.log ('A ' + error.name + ' has occured in ' + provider.title + ': ' + error.message);
                 }
@@ -419,10 +398,14 @@ SearchSystem.prototype = {
         } else {
             for (let i = 0; i < this._providers.length; i++) {
                 let provider = this._providers[i];
-                provider.tryCancelAsync();
                 try {
-                    let providerResults = provider.getInitialResultSet(terms);
-                    results.push([provider, providerResults]);
+                    if (provider.async) {
+                        provider.getInitialResultSetAsync(terms);
+                        results.push([provider, []]);
+                    } else {
+                        let providerResults = provider.getInitialResultSet(terms);
+                        results.push([provider, providerResults]);
+                    }
                 } catch (error) {
                     global.log ('A ' + error.name + ' has occured in ' + provider.title + ': ' + error.message);
                 }
@@ -433,5 +416,5 @@ SearchSystem.prototype = {
         this._previousResults = results;
         this.emit('search-completed', results);
     },
-};
+});
 Signals.addSignalMethods(SearchSystem.prototype);

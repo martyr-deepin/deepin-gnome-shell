@@ -62,9 +62,10 @@
 #include "st-icon.h"
 #include "st-widget.h"
 #include "st-texture-cache.h"
-#include "st-marshal.h"
 #include "st-clipboard.h"
 #include "st-private.h"
+
+#include "st-widget-accessible.h"
 
 #define HAS_FOCUS(actor) (clutter_actor_get_stage (actor) && clutter_stage_get_key_focus ((ClutterStage *) clutter_actor_get_stage (actor)) == actor)
 
@@ -109,6 +110,8 @@ struct _StEntryPrivate
 static guint entry_signals[LAST_SIGNAL] = { 0, };
 
 G_DEFINE_TYPE (StEntry, st_entry, ST_TYPE_WIDGET);
+
+static GType st_entry_accessible_get_type (void) G_GNUC_CONST;
 
 static void
 st_entry_set_property (GObject      *gobject,
@@ -383,13 +386,11 @@ st_entry_allocate (ClutterActor          *actor,
 {
   StEntryPrivate *priv = ST_ENTRY_PRIV (actor);
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
-  ClutterActorClass *parent_class;
   ClutterActorBox content_box, child_box, icon_box;
   gfloat icon_w, icon_h;
   gfloat entry_h, min_h, pref_h, avail_h;
 
-  parent_class = CLUTTER_ACTOR_CLASS (st_entry_parent_class);
-  parent_class->allocate (actor, box, flags);
+  clutter_actor_set_allocation (actor, box, flags);
 
   st_theme_node_get_content_box (theme_node, box, &content_box);
 
@@ -514,73 +515,6 @@ clutter_text_password_char_cb (GObject    *object,
 }
 
 static void
-st_entry_paint (ClutterActor *actor)
-{
-  StEntryPrivate *priv = ST_ENTRY_PRIV (actor);
-  ClutterActorClass *parent_class;
-
-  parent_class = CLUTTER_ACTOR_CLASS (st_entry_parent_class);
-  parent_class->paint (actor);
-
-  clutter_actor_paint (priv->entry);
-
-  if (priv->primary_icon)
-    clutter_actor_paint (priv->primary_icon);
-
-  if (priv->secondary_icon)
-    clutter_actor_paint (priv->secondary_icon);
-}
-
-static void
-st_entry_pick (ClutterActor       *actor,
-               const ClutterColor *c)
-{
-  StEntryPrivate *priv = ST_ENTRY_PRIV (actor);
-
-  CLUTTER_ACTOR_CLASS (st_entry_parent_class)->pick (actor, c);
-
-  clutter_actor_paint (priv->entry);
-
-  if (priv->primary_icon)
-    clutter_actor_paint (priv->primary_icon);
-
-  if (priv->secondary_icon)
-    clutter_actor_paint (priv->secondary_icon);
-}
-
-static void
-st_entry_map (ClutterActor *actor)
-{
-  StEntryPrivate *priv = ST_ENTRY (actor)->priv;
-
-  CLUTTER_ACTOR_CLASS (st_entry_parent_class)->map (actor);
-
-  clutter_actor_map (priv->entry);
-
-  if (priv->primary_icon)
-    clutter_actor_map (priv->primary_icon);
-
-  if (priv->secondary_icon)
-    clutter_actor_map (priv->secondary_icon);
-}
-
-static void
-st_entry_unmap (ClutterActor *actor)
-{
-  StEntryPrivate *priv = ST_ENTRY (actor)->priv;
-
-  CLUTTER_ACTOR_CLASS (st_entry_parent_class)->unmap (actor);
-
-  clutter_actor_unmap (priv->entry);
-
-  if (priv->primary_icon)
-    clutter_actor_unmap (priv->primary_icon);
-
-  if (priv->secondary_icon)
-    clutter_actor_unmap (priv->secondary_icon);
-}
-
-static void
 st_entry_clipboard_callback (StClipboard *clipboard,
                              const gchar *text,
                              gpointer     data)
@@ -693,16 +627,13 @@ st_entry_class_init (StEntryClass *klass)
   actor_class->get_preferred_width = st_entry_get_preferred_width;
   actor_class->get_preferred_height = st_entry_get_preferred_height;
   actor_class->allocate = st_entry_allocate;
-  actor_class->paint = st_entry_paint;
-  actor_class->pick = st_entry_pick;
-  actor_class->map = st_entry_map;
-  actor_class->unmap = st_entry_unmap;
 
   actor_class->key_press_event = st_entry_key_press_event;
   actor_class->key_focus_in = st_entry_key_focus_in;
 
   widget_class->style_changed = st_entry_style_changed;
   widget_class->navigate_focus = st_entry_navigate_focus;
+  widget_class->get_accessible_type = st_entry_accessible_get_type;
 
   pspec = g_param_spec_object ("clutter-text",
 			       "Clutter Text",
@@ -735,8 +666,7 @@ st_entry_class_init (StEntryClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   G_STRUCT_OFFSET (StEntryClass, primary_icon_clicked),
-                  NULL, NULL,
-                  _st_marshal_VOID__VOID,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 0);
   /**
    * StEntry::secondary-icon-clicked:
@@ -748,8 +678,7 @@ st_entry_class_init (StEntryClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   G_STRUCT_OFFSET (StEntryClass, secondary_icon_clicked),
-                  NULL, NULL,
-                  _st_marshal_VOID__VOID,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 0);
 }
 
@@ -778,7 +707,7 @@ st_entry_init (StEntry *entry)
 
   priv->spacing = 6.0f;
 
-  clutter_actor_set_parent (priv->entry, CLUTTER_ACTOR (entry));
+  clutter_actor_add_child (CLUTTER_ACTOR (entry), priv->entry);
   clutter_actor_set_reactive ((ClutterActor *) entry, TRUE);
 
   /* set cursor hidden until we receive focus */
@@ -955,7 +884,7 @@ _st_entry_set_icon (StEntry       *entry,
       g_signal_handlers_disconnect_by_func (*icon,
                                             _st_entry_icon_press_cb,
                                             entry);
-      clutter_actor_unparent (*icon);
+      clutter_actor_remove_child (CLUTTER_ACTOR (entry), *icon);
       *icon = NULL;
     }
 
@@ -964,31 +893,12 @@ _st_entry_set_icon (StEntry       *entry,
       *icon = g_object_ref (new_icon);
 
       clutter_actor_set_reactive (*icon, TRUE);
-      clutter_actor_set_parent (*icon, CLUTTER_ACTOR (entry));
+      clutter_actor_add_child (CLUTTER_ACTOR (entry), *icon);
       g_signal_connect (*icon, "button-release-event",
                         G_CALLBACK (_st_entry_icon_press_cb), entry);
     }
 
   clutter_actor_queue_relayout (CLUTTER_ACTOR (entry));
-}
-
-static void
-_st_entry_set_icon_from_file (StEntry       *entry,
-                              ClutterActor **icon,
-                              const gchar   *filename)
-{
-  ClutterActor *new_icon = NULL;
-
-  if (filename)
-    {
-      StTextureCache *cache;
-
-      cache = st_texture_cache_get_default ();
-
-      new_icon = (ClutterActor*) st_texture_cache_load_file_simple (cache, filename);
-    }
-
-  _st_entry_set_icon  (entry, icon, new_icon);
 }
 
 /**
@@ -1031,45 +941,97 @@ st_entry_set_secondary_icon (StEntry      *entry,
   _st_entry_set_icon (entry, &priv->secondary_icon, icon);
 }
 
-/**
- * st_entry_set_primary_icon_from_file:
- * @entry: a #StEntry
- * @filename: (allow-none): filename of an icon
- *
- * Set the primary icon of the entry to the given filename
- */
-void
-st_entry_set_primary_icon_from_file (StEntry     *entry,
-                                     const gchar *filename)
+/******************************************************************************/
+/*************************** ACCESSIBILITY SUPPORT ****************************/
+/******************************************************************************/
+
+#define ST_TYPE_ENTRY_ACCESSIBLE         (st_entry_accessible_get_type ())
+#define ST_ENTRY_ACCESSIBLE(o)           (G_TYPE_CHECK_INSTANCE_CAST ((o), ST_TYPE_ENTRY_ACCESSIBLE, StEntryAccessible))
+#define ST_IS_ENTRY_ACCESSIBLE(o)        (G_TYPE_CHECK_INSTANCE_TYPE ((o), ST_TYPE_ENTRY_ACCESSIBLE))
+#define ST_ENTRY_ACCESSIBLE_CLASS(c)     (G_TYPE_CHECK_CLASS_CAST ((c),    ST_TYPE_ENTRY_ACCESSIBLE, StEntryAccessibleClass))
+#define ST_IS_ENTRY_ACCESSIBLE_CLASS(c)  (G_TYPE_CHECK_CLASS_TYPE ((c),    ST_TYPE_ENTRY_ACCESSIBLE))
+#define ST_ENTRY_ACCESSIBLE_GET_CLASS(o) (G_TYPE_INSTANCE_GET_CLASS ((o),  ST_TYPE_ENTRY_ACCESSIBLE, StEntryAccessibleClass))
+
+typedef struct _StEntryAccessible  StEntryAccessible;
+typedef struct _StEntryAccessibleClass  StEntryAccessibleClass;
+
+struct _StEntryAccessible
 {
-  StEntryPrivate *priv;
+  StWidgetAccessible parent;
+};
 
-  g_return_if_fail (ST_IS_ENTRY (entry));
+struct _StEntryAccessibleClass
+{
+  StWidgetAccessibleClass parent_class;
+};
 
-  priv = entry->priv;
+G_DEFINE_TYPE (StEntryAccessible, st_entry_accessible, ST_TYPE_WIDGET_ACCESSIBLE)
 
-  _st_entry_set_icon_from_file (entry, &priv->primary_icon, filename);
-
+static void
+st_entry_accessible_init (StEntryAccessible *self)
+{
+  /* initialization done on AtkObject->initialize */
 }
 
-/**
- * st_entry_set_secondary_icon_from_file:
- * @entry: a #StEntry
- * @filename: (allow-none): filename of an icon
- *
- * Set the primary icon of the entry to the given filename
- */
-void
-st_entry_set_secondary_icon_from_file (StEntry     *entry,
-                                       const gchar *filename)
+static void
+st_entry_accessible_initialize (AtkObject *obj,
+                                gpointer   data)
 {
-  StEntryPrivate *priv;
+  ATK_OBJECT_CLASS (st_entry_accessible_parent_class)->initialize (obj, data);
 
-  g_return_if_fail (ST_IS_ENTRY (entry));
-
-  priv = entry->priv;
-
-  _st_entry_set_icon_from_file (entry, &priv->secondary_icon, filename);
-
+  /* StEntry is behaving as a StImText container */
+  atk_object_set_role (obj, ATK_ROLE_PANEL);
 }
 
+static gint
+st_entry_accessible_get_n_children (AtkObject *obj)
+{
+  StEntry *entry = NULL;
+
+  g_return_val_if_fail (ST_IS_ENTRY_ACCESSIBLE (obj), 0);
+
+  entry = ST_ENTRY (atk_gobject_accessible_get_object (ATK_GOBJECT_ACCESSIBLE (obj)));
+
+  if (entry == NULL)
+    return 0;
+
+  if (entry->priv->entry == NULL)
+    return 0;
+  else
+    return 1;
+}
+
+static AtkObject*
+st_entry_accessible_ref_child (AtkObject *obj,
+                               gint       i)
+{
+  StEntry *entry = NULL;
+  AtkObject *result = NULL;
+
+  g_return_val_if_fail (ST_IS_ENTRY_ACCESSIBLE (obj), NULL);
+  g_return_val_if_fail (i == 0, NULL);
+
+  entry = ST_ENTRY (atk_gobject_accessible_get_object (ATK_GOBJECT_ACCESSIBLE (obj)));
+
+  if (entry == NULL)
+    return NULL;
+
+  if (entry->priv->entry == NULL)
+    return NULL;
+
+  result = clutter_actor_get_accessible (entry->priv->entry);
+  g_object_ref (result);
+
+  return result;
+}
+
+
+static void
+st_entry_accessible_class_init (StEntryAccessibleClass *klass)
+{
+  AtkObjectClass *atk_class = ATK_OBJECT_CLASS (klass);
+
+  atk_class->initialize = st_entry_accessible_initialize;
+  atk_class->get_n_children = st_entry_accessible_get_n_children;
+  atk_class->ref_child= st_entry_accessible_ref_child;
+}

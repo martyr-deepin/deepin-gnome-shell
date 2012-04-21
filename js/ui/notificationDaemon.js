@@ -1,7 +1,7 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Clutter = imports.gi.Clutter;
-const DBus = imports.dbus;
+const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Lang = imports.lang;
 const Shell = imports.gi.Shell;
@@ -16,49 +16,52 @@ const Util = imports.misc.util;
 
 let nextNotificationId = 1;
 
-// Should really be defined in dbus.js
-const BusIface = {
-    name: 'org.freedesktop.DBus',
-    methods: [{ name: 'GetConnectionUnixProcessID',
-                inSignature: 's',
-                outSignature: 'i' }]
-};
+// Should really be defined in Gio.js
+const BusIface = <interface name="org.freedesktop.DBus">
+<method name="GetConnectionUnixProcessID">
+    <arg type="s" direction="in" />
+    <arg type="u" direction="out" />
+</method>
+</interface>;
 
-const Bus = function () {
-    this._init();
-};
+var BusProxy = Gio.DBusProxy.makeProxyWrapper(BusIface);
+function Bus() {
+    return new BusProxy(Gio.DBus.session, 'org.freedesktop.DBus', '/org/freedesktop/DBus');
+}
 
-Bus.prototype = {
-     _init: function() {
-         DBus.session.proxifyObject(this, 'org.freedesktop.DBus', '/org/freedesktop/DBus');
-     }
-};
-
-DBus.proxifyPrototype(Bus.prototype, BusIface);
-
-const NotificationDaemonIface = {
-    name: 'org.freedesktop.Notifications',
-    methods: [{ name: 'Notify',
-                inSignature: 'susssasa{sv}i',
-                outSignature: 'u'
-              },
-              { name: 'CloseNotification',
-                inSignature: 'u',
-                outSignature: ''
-              },
-              { name: 'GetCapabilities',
-                inSignature: '',
-                outSignature: 'as'
-              },
-              { name: 'GetServerInformation',
-                inSignature: '',
-                outSignature: 'ssss'
-              }],
-    signals: [{ name: 'NotificationClosed',
-                inSignature: 'uu' },
-              { name: 'ActionInvoked',
-                inSignature: 'us' }]
-};
+const NotificationDaemonIface = <interface name="org.freedesktop.Notifications">
+<method name="Notify">
+    <arg type="s" direction="in"/>
+    <arg type="u" direction="in"/>
+    <arg type="s" direction="in"/>
+    <arg type="s" direction="in"/>
+    <arg type="s" direction="in"/>
+    <arg type="as" direction="in"/>
+    <arg type="a{sv}" direction="in"/>
+    <arg type="i" direction="in"/>
+    <arg type="u" direction="out"/>
+</method>
+<method name="CloseNotification">
+    <arg type="u" direction="in"/>
+</method>
+<method name="GetCapabilities">
+    <arg type="as" direction="out"/>
+</method>
+<method name="GetServerInformation">
+    <arg type="s" direction="out"/>
+    <arg type="s" direction="out"/>
+    <arg type="s" direction="out"/>
+    <arg type="s" direction="out"/>
+</method>
+<signal name="NotificationClosed">
+    <arg type="u"/>
+    <arg type="u"/>
+</signal>
+<signal name="ActionInvoked">
+    <arg type="u"/>
+    <arg type="s"/>
+</signal>
+</interface>;
 
 const NotificationClosedReason = {
     EXPIRED: 1,
@@ -84,15 +87,14 @@ const rewriteRules = {
     ]
 };
 
-function NotificationDaemon() {
-    this._init();
-}
+const NotificationDaemon = new Lang.Class({
+    Name: 'NotificationDaemon',
 
-NotificationDaemon.prototype = {
     _init: function() {
-        DBus.session.exportObject('/org/freedesktop/Notifications', this);
+        this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(NotificationDaemonIface, this);
+        this._dbusImpl.export(Gio.DBus.session, '/org/freedesktop/Notifications');
 
-        this._sources = {};
+        this._sources = [];
         this._senderToPid = {};
         this._notifications = {};
         this._busProxy = new Bus();
@@ -150,14 +152,30 @@ NotificationDaemon.prototype = {
         }
     },
 
+    _lookupSource: function(title, pid, trayIcon) {
+        for (let i = 0; i < this._sources.length; i++) {
+            let source = this._sources[i];
+            if (source.pid == pid &&
+                (source.initialTitle == title || source.trayIcon || trayIcon))
+                return source;
+        }
+        return null;
+    },
+
     // Returns the source associated with ndata.notification if it is set.
-    // Otherwise, returns the source associated with the pid if one is
-    // stored in this._sources and the notification is not transient.
-    // Otherwise, creates a new source as long as pid is provided.
+    // Otherwise, returns the source associated with the title and pid if
+    // such source is stored in this._sources and the notification is not
+    // transient. If the existing or requested source is associated with
+    // a tray icon and passed in pid matches a pid of an existing source,
+    // the title match is ignored to enable representing a tray icon and
+    // notifications from the same application with a single source.
+    //
+    // If no existing source is found, a new source is created as long as
+    // pid is provided.
     //
     // Either a pid or ndata.notification is needed to retrieve or
     // create a source.
-    _getSource: function(title, pid, ndata, sender) {
+    _getSource: function(title, pid, ndata, sender, trayIcon) {
         if (!pid && !(ndata && ndata.notification))
             return null;
 
@@ -174,20 +192,24 @@ NotificationDaemon.prototype = {
         // with a transient one from the same sender, so we
         // always create a new source object for new transient notifications
         // and never add it to this._sources .
-        if (!isForTransientNotification && this._sources[pid]) {
-            let source = this._sources[pid];
-            source.setTitle(title);
-            return source;
+        if (!isForTransientNotification) {
+            let source = this._lookupSource(title, pid, trayIcon);
+            if (source) {
+                source.setTitle(title);
+                return source;
+            }
         }
 
-        let source = new Source(title, pid, sender);
+        let source = new Source(title, pid, sender, trayIcon);
         source.setTransient(isForTransientNotification);
 
         if (!isForTransientNotification) {
-            this._sources[pid] = source;
+            this._sources.push(source);
             source.connect('destroy', Lang.bind(this,
                 function() {
-                    delete this._sources[pid];
+                    let index = this._sources.indexOf(source);
+                    if (index >= 0)
+                        this._sources.splice(index, 1);
                 }));
         }
 
@@ -195,8 +217,8 @@ NotificationDaemon.prototype = {
         return source;
     },
 
-    Notify: function(appName, replacesId, icon, summary, body,
-                     actions, hints, timeout) {
+    NotifyAsync: function(params, invocation) {
+        let [appName, replacesId, icon, summary, body, actions, hints, timeout] = params;
         let id;
 
         // Filter out chat, presence, calls and invitation notifications from
@@ -215,7 +237,7 @@ NotificationDaemon.prototype = {
                                         function () {
                                             this._emitNotificationClosed(id, NotificationClosedReason.DISMISSED);
                                         }));
-            return id;
+            return invocation.return_value(GLib.Variant.new('(u)', [id]));
         }
 
         let rewrites = rewriteRules[appName];
@@ -225,6 +247,11 @@ NotificationDaemon.prototype = {
                 if (summary.search(rule.pattern) != -1)
                     summary = summary.replace(rule.pattern, rule.replacement);
             }
+        }
+
+        for (let hint in hints) {
+            // unpack the variants
+            hints[hint] = hints[hint].deep_unpack();
         }
 
         hints = Params.parse(hints, { urgency: Urgency.NORMAL }, true);
@@ -258,51 +285,55 @@ NotificationDaemon.prototype = {
         }
         this._notifications[id] = ndata;
 
-        let sender = DBus.getCurrentMessageContext().sender;
+        let sender = invocation.get_sender();
         let pid = this._senderToPid[sender];
 
-        let source = this._getSource(appName, pid, ndata, sender);
+        let source = this._getSource(appName, pid, ndata, sender, null);
 
         if (source) {
             this._notifyForSource(source, ndata);
-            return id;
+            return invocation.return_value(GLib.Variant.new('(u)', [id]));
         }
 
         if (replacesId) {
             // There's already a pending call to GetConnectionUnixProcessID,
             // which will see the new notification data when it finishes,
             // so we don't have to do anything.
-            return id;
+            return invocation.return_value(GLib.Variant.new('(u)', [id]));;
         }
 
-        this._busProxy.GetConnectionUnixProcessIDRemote(sender, Lang.bind(this,
-            function (pid, ex) {
-                // The app may have updated or removed the notification
-                ndata = this._notifications[id];
-                if (!ndata)
-                    return;
+        this._busProxy.GetConnectionUnixProcessIDRemote(sender, Lang.bind(this, function (result, excp) {
+            // The app may have updated or removed the notification
+            ndata = this._notifications[id];
+            if (!ndata)
+                return;
 
-                source = this._getSource(appName, pid, ndata, sender);
+            if (excp) {
+                logError(excp, 'Call to GetConnectionUnixProcessID failed');
+                return;
+            }
 
-                // We only store sender-pid entries for persistent sources.
-                // Removing the entries once the source is destroyed
-                // would result in the entries associated with transient
-                // sources removed once the notification is shown anyway.
-                // However, keeping these pairs would mean that we would
-                // possibly remove an entry associated with a persistent
-                // source when a transient source for the same sender is
-                // distroyed.
-                if (!source.isTransient) {
-                    this._senderToPid[sender] = pid;
-                    source.connect('destroy', Lang.bind(this,
-                        function() {
-                            delete this._senderToPid[sender];
-                        }));
-                }
-                this._notifyForSource(source, ndata);
-            }));
+            let [pid] = result;
+            source = this._getSource(appName, pid, ndata, sender, null);
 
-        return id;
+            // We only store sender-pid entries for persistent sources.
+            // Removing the entries once the source is destroyed
+            // would result in the entries associated with transient
+            // sources removed once the notification is shown anyway.
+            // However, keeping these pairs would mean that we would
+            // possibly remove an entry associated with a persistent
+            // source when a transient source for the same sender is
+            // distroyed.
+            if (!source.isTransient) {
+                this._senderToPid[sender] = pid;
+                source.connect('destroy', Lang.bind(this, function() {
+                    delete this._senderToPid[sender];
+                }));
+            }
+            this._notifyForSource(source, ndata);
+        }));
+
+        return invocation.return_value(GLib.Variant.new('(u)', [id]));
     },
 
     _notifyForSource: function(source, ndata) {
@@ -432,8 +463,8 @@ NotificationDaemon.prototype = {
         if (!tracker.focus_app)
             return;
 
-        for (let id in this._sources) {
-            let source = this._sources[id];
+        for (let i = 0; i < this._sources.length; i++) {
+            let source = this._sources[i];
             if (source.app == tracker.focus_app) {
                 source.destroyNonResidentNotifications();
                 return;
@@ -442,61 +473,55 @@ NotificationDaemon.prototype = {
     },
 
     _emitNotificationClosed: function(id, reason) {
-        DBus.session.emit_signal('/org/freedesktop/Notifications',
-                                 'org.freedesktop.Notifications',
-                                 'NotificationClosed', 'uu',
-                                 [id, reason]);
+        this._dbusImpl.emit_signal('NotificationClosed',
+                                   GLib.Variant.new('(uu)', [id, reason]));
     },
 
     _emitActionInvoked: function(id, action) {
-        DBus.session.emit_signal('/org/freedesktop/Notifications',
-                                 'org.freedesktop.Notifications',
-                                 'ActionInvoked', 'us',
-                                 [id, action]);
+        this._dbusImpl.emit_signal('ActionInvoked',
+                                   GLib.Variant.new('(us)', [id, action]));
     },
 
     _onTrayIconAdded: function(o, icon) {
-        let source = this._getSource(icon.title || icon.wm_class || _("Unknown"), icon.pid, null, null);
-        source.setTrayIcon(icon);
+        let source = this._getSource(icon.title || icon.wm_class || _("Unknown"), icon.pid, null, null, icon);
     },
 
     _onTrayIconRemoved: function(o, icon) {
-        let source = this._sources[icon.pid];
+        let source = this._lookupSource(null, icon.pid, true);
         if (source)
             source.destroy();
     }
-};
+});
 
-DBus.conformExport(NotificationDaemon.prototype, NotificationDaemonIface);
+const Source = new Lang.Class({
+    Name: 'NotificationDaemonSource',
+    Extends: MessageTray.Source,
 
-function Source(title, pid, sender) {
-    this._init(title, pid, sender);
-}
+    _init: function(title, pid, sender, trayIcon) {
+        this.parent(title);
 
-Source.prototype = {
-    __proto__:  MessageTray.Source.prototype,
+        this.initialTitle = title;
 
-    _init: function(title, pid, sender) {
-        MessageTray.Source.prototype._init.call(this, title);
-
-        this._pid = pid;
+        this.pid = pid;
         if (sender)
-            // TODO: dbus-glib implementation of watch_name() doesn’t return an id to be used for
-            // unwatch_name() or implement unwatch_name(), however when we move to using GDBus implementation,
-            // we should save the id here and call unwatch_name() with it in destroy().
-            // Moving to GDBus is the work in progress: https://bugzilla.gnome.org/show_bug.cgi?id=648651
-            // and https://bugzilla.gnome.org/show_bug.cgi?id=622921 .
-            DBus.session.watch_name(sender,
-                                    false,
-                                    null,
-                                    Lang.bind(this, this._onNameVanished));
+            this._nameWatcherId = Gio.DBus.session.watch_name(sender,
+                                                              Gio.BusNameWatcherFlags.NONE,
+                                                              null,
+                                                              Lang.bind(this, this._onNameVanished));
+        else
+            this._nameWatcherId = 0;
 
         this._setApp();
         if (this.app)
             this.title = this.app.get_name();
         else
             this.useNotificationIcon = true;
-        this._trayIcon = null;
+
+        this.trayIcon = trayIcon;
+        if (this.trayIcon) {
+           this._setSummaryIcon(this.trayIcon);
+           this.useNotificationIcon = false;
+        }
     },
 
     _onNameVanished: function() {
@@ -523,7 +548,7 @@ Source.prototype = {
     },
 
     handleSummaryClick: function() {
-        if (!this._trayIcon)
+        if (!this.trayIcon)
             return false;
 
         let event = Clutter.get_current_event();
@@ -544,11 +569,11 @@ Source.prototype = {
             let id = global.connect('notify::stage-input-mode', Lang.bind(this,
                 function () {
                     global.disconnect(id);
-                    this._trayIcon.click(event);
+                    this.trayIcon.click(event);
                 }));
             Main.overview.hide();
         } else {
-            this._trayIcon.click(event);
+            this.trayIcon.click(event);
         }
         return true;
     },
@@ -557,22 +582,16 @@ Source.prototype = {
         if (this.app)
             return;
 
-        this.app = Shell.WindowTracker.get_default().get_app_from_pid(this._pid);
+        this.app = Shell.WindowTracker.get_default().get_app_from_pid(this.pid);
         if (!this.app)
             return;
 
         // Only override the icon if we were previously using
         // notification-based icons (ie, not a trayicon) or if it was unset before
-        if (!this._trayIcon) {
+        if (!this.trayIcon) {
             this.useNotificationIcon = false;
             this._setSummaryIcon(this.app.create_icon_texture (this.ICON_SIZE));
         }
-    },
-
-    setTrayIcon: function(icon) {
-        this._setSummaryIcon(icon);
-        this.useNotificationIcon = false;
-        this._trayIcon = icon;
     },
 
     open: function(notification) {
@@ -581,7 +600,7 @@ Source.prototype = {
     },
 
     _lastNotificationRemoved: function() {
-        if (!this._trayIcon)
+        if (!this.trayIcon)
             this.destroy();
     },
 
@@ -597,6 +616,11 @@ Source.prototype = {
     },
 
     destroy: function() {
-        MessageTray.Source.prototype.destroy.call(this);
+        if (this._nameWatcherId) {
+            Gio.DBus.session.unwatch_name(this._nameWatcherId);
+            this._nameWatcherId = 0;
+        }
+
+        this.parent();
     }
-};
+});

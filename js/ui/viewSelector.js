@@ -15,11 +15,9 @@ const SearchDisplay = imports.ui.searchDisplay;
 const ShellEntry = imports.ui.shellEntry;
 const Tweener = imports.ui.tweener;
 
-function BaseTab(titleActor, pageActor, name, a11yIcon) {
-    this._init(titleActor, pageActor, name, a11yIcon);
-}
+const BaseTab = new Lang.Class({
+    Name: 'BaseTab',
 
-BaseTab.prototype = {
     _init: function(titleActor, pageActor, name, a11yIcon) {
         this.title = titleActor;
         this.page = new St.Bin({ child: pageActor,
@@ -75,16 +73,13 @@ BaseTab.prototype = {
     _activate: function() {
         this.emit('activated');
     }
-};
+});
 Signals.addSignalMethods(BaseTab.prototype);
 
 
-function ViewTab(id, label, pageActor, a11yIcon) {
-    this._init(id, label, pageActor, a11yIcon);
-}
-
-ViewTab.prototype = {
-    __proto__: BaseTab.prototype,
+const ViewTab = new Lang.Class({
+    Name: 'ViewTab',
+    Extends: BaseTab,
 
     _init: function(id, label, pageActor, a11yIcon) {
         this.id = id;
@@ -93,17 +88,14 @@ ViewTab.prototype = {
                                          style_class: 'view-tab-title' });
         titleActor.connect('clicked', Lang.bind(this, this._activate));
 
-        BaseTab.prototype._init.call(this, titleActor, pageActor, label, a11yIcon);
+        this.parent(titleActor, pageActor, label, a11yIcon);
     }
-};
+});
 
 
-function SearchTab() {
-    this._init();
-}
-
-SearchTab.prototype = {
-    __proto__: BaseTab.prototype,
+const SearchTab = new Lang.Class({
+    Name: 'SearchTab',
+    Extends: BaseTab,
 
     _init: function() {
         this.active = false;
@@ -136,23 +128,19 @@ SearchTab.prototype = {
         this._iconClickedId = 0;
 
         this._searchResults = new SearchDisplay.SearchResults(this._searchSystem, this._openSearchSystem);
-        BaseTab.prototype._init.call(this,
-                                     this._entry,
-                                     this._searchResults.actor,
-                                     _("Search"),
-                                     'edit-find');
+        this.parent(this._entry, this._searchResults.actor, _("Search"), 'edit-find');
 
         this._text.connect('text-changed', Lang.bind(this, this._onTextChanged));
         this._text.connect('key-press-event', Lang.bind(this, function (o, e) {
             // We can't connect to 'activate' here because search providers
-            // might want to do something with the modifiers in activateSelected.
+            // might want to do something with the modifiers in activateDefault.
             let symbol = e.get_key_symbol();
             if (symbol == Clutter.Return || symbol == Clutter.KP_Enter) {
                 if (this._searchTimeoutId > 0) {
                     Mainloop.source_remove(this._searchTimeoutId);
                     this._doSearch();
                 }
-                this._searchResults.activateSelected();
+                this._searchResults.activateDefault();
                 return true;
             }
             return false;
@@ -160,13 +148,37 @@ SearchTab.prototype = {
 
         this._entry.connect('notify::mapped', Lang.bind(this, this._onMapped));
 
-        global.stage.connect('notify::key-focus', Lang.bind(this, this._updateCursorVisibility));
+        global.stage.connect('notify::key-focus', Lang.bind(this, this._onStageKeyFocusChanged));
 
         this._capturedEventId = 0;
+
+        this._text.connect('key-focus-in', Lang.bind(this, function() {
+            this._searchResults.highlightDefault(true);
+        }));
+        this._text.connect('key-focus-out', Lang.bind(this, function() {
+            this._searchResults.highlightDefault(false);
+        }));
+
+        // Since the entry isn't inside the results container we install this
+        // dummy widget as the last results container child so that we can
+        // include the entry in the keynav tab path...
+        this._focusTrap = new St.Bin({ can_focus: true });
+        this._focusTrap.connect('key-focus-in', Lang.bind(this, function() {
+            this._entry.grab_key_focus();
+        }));
+        // ... but make it unfocusable using arrow keys keynav by making its
+        // bounding box always contain the possible focus source's bounding
+        // box since StWidget's keynav logic won't ever select it as a target
+        // in that case.
+        this._focusTrap.add_constraint(new Clutter.BindConstraint({ source: this._searchResults.actor,
+                                                                    coordinate: Clutter.BindCoordinate.ALL }));
+        this._searchResults.actor.add_actor(this._focusTrap);
+
+        global.focus_manager.add_group(this._searchResults.actor);
     },
 
     hide: function() {
-        BaseTab.prototype.hide.call(this);
+        this.parent();
 
         // Leave the entry focused when it doesn't have any text;
         // when replacing a selected search term, Clutter emits
@@ -175,21 +187,29 @@ SearchTab.prototype = {
         // incorrectly when we remove focus
         // (https://bugzilla.gnome.org/show_bug.cgi?id=636341) */
         if (this._text.text != '')
-            this._reset();
+            this.reset();
     },
 
-    _reset: function () {
-        this._text.text = '';
-
+    reset: function () {
         global.stage.set_key_focus(null);
+
+        this._entry.text = '';
 
         this._text.set_cursor_visible(true);
         this._text.set_selection(0, 0);
     },
 
-    _updateCursorVisibility: function() {
+    _onStageKeyFocusChanged: function() {
         let focus = global.stage.get_key_focus();
-        this._text.set_cursor_visible(focus == this._text);
+        let appearFocused = (this._entry.contains(focus) ||
+                             this._searchResults.actor.contains(focus));
+
+        this._text.set_cursor_visible(appearFocused);
+
+        if (appearFocused)
+            this._entry.add_style_pseudo_class('focus');
+        else
+            this._entry.remove_style_pseudo_class('focus');
     },
 
     _onMapped: function() {
@@ -240,7 +260,7 @@ SearchTab.prototype = {
             if (this._iconClickedId == 0) {
                 this._iconClickedId = this._entry.connect('secondary-icon-clicked',
                     Lang.bind(this, function() {
-                        this._reset();
+                        this.reset();
                     }));
             }
             this._activate();
@@ -266,25 +286,37 @@ SearchTab.prototype = {
 
     _onKeyPress: function(entry, event) {
         let symbol = event.get_key_symbol();
-        if (symbol == Clutter.Up) {
-            if (!this.active)
-                return true;
-            this._searchResults.selectUp(false);
-
-            return true;
-        } else if (symbol == Clutter.Down) {
-            if (!this.active)
-                return true;
-
-            this._searchResults.selectDown(false);
-            return true;
-        } else if (symbol == Clutter.Escape) {
+        if (symbol == Clutter.Escape) {
             if (this._isActivated()) {
-                this._reset();
+                this.reset();
+                return true;
+            }
+        } else if (this.active) {
+            let arrowNext, nextDirection;
+            if (entry.get_text_direction() == Clutter.TextDirection.RTL) {
+                arrowNext = Clutter.Left;
+                nextDirection = Gtk.DirectionType.LEFT;
+            } else {
+                arrowNext = Clutter.Right;
+                nextDirection = Gtk.DirectionType.RIGHT;
+            }
+
+            if (symbol == Clutter.Tab) {
+                this._searchResults.navigateFocus(Gtk.DirectionType.TAB_FORWARD);
+                return true;
+            } else if (symbol == Clutter.ISO_Left_Tab) {
+                this._focusTrap.can_focus = false;
+                this._searchResults.navigateFocus(Gtk.DirectionType.TAB_BACKWARD);
+                this._focusTrap.can_focus = true;
+                return true;
+            } else if (symbol == Clutter.Down) {
+                this._searchResults.navigateFocus(Gtk.DirectionType.DOWN);
+                return true;
+            } else if (symbol == arrowNext && this._text.position == -1) {
+                this._searchResults.navigateFocus(nextDirection);
                 return true;
             }
         }
-
         return false;
     },
 
@@ -296,7 +328,7 @@ SearchTab.prototype = {
                 // the user clicked outside after activating the entry, but
                 // with no search term entered and no keyboard button pressed
                 // - cancel the search
-                this._reset();
+                this.reset();
             }
         }
 
@@ -310,14 +342,12 @@ SearchTab.prototype = {
 
         return false;
     }
-};
+});
 
 
-function ViewSelector() {
-    this._init();
-}
+const ViewSelector = new Lang.Class({
+    Name: 'ViewSelector',
 
-ViewSelector.prototype = {
     _init : function() {
         this.actor = new St.BoxLayout({ name: 'viewSelector',
                                         vertical: true });
@@ -433,29 +463,6 @@ ViewSelector.prototype = {
         // not when setting the initially selected one.
         if (!tab.visible)
             tab.show(!firstSwitch);
-
-        // Pull a Meg Ryan:
-        if (!firstSwitch && Main.overview.workspaces) {
-            if (tab != this._tabs[0]) {
-                Tweener.addTween(Main.overview.workspaces.actor,
-                                 { opacity: 0,
-                                   time: 0.1,
-                                   transition: 'easeOutQuad',
-                                   onComplete: Lang.bind(this,
-                                       function() {
-                                           Main.overview.workspaces.actor.hide();
-                                           Main.overview.workspaces.actor.opacity = 255;
-                                       })
-                                });
-            } else {
-                Main.overview.workspaces.actor.opacity = 0;
-                Main.overview.workspaces.actor.show();
-                Tweener.addTween(Main.overview.workspaces.actor,
-                                 { opacity: 255,
-                                   time: 0.1,
-                                   transition: 'easeOutQuad' });
-            }
-        }
     },
 
     switchTab: function(id) {
@@ -523,7 +530,7 @@ ViewSelector.prototype = {
         let childBox = new Clutter.ActorBox();
         childBox.y1 = 0;
         childBox.y2 = allocHeight;
-        if (this.actor.get_direction() == St.TextDirection.RTL) {
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL) {
             childBox.x1 = allocWidth - barNatWidth;
             childBox.x2 = allocWidth;
         } else {
@@ -532,7 +539,7 @@ ViewSelector.prototype = {
         }
         this._tabBox.allocate(childBox, flags);
 
-        if (this.actor.get_direction() == St.TextDirection.RTL) {
+        if (this.actor.get_text_direction() == Clutter.TextDirection.RTL) {
             childBox.x1 = 0;
             childBox.x2 = searchNatWidth;
         } else {
@@ -548,24 +555,34 @@ ViewSelector.prototype = {
     },
 
     _onStageKeyPress: function(actor, event) {
-        let modifiers = Shell.get_event_state(event);
+        let modifiers = event.get_state();
         let symbol = event.get_key_symbol();
 
         if (symbol == Clutter.Escape) {
-            Main.overview.hide();
+            if (this._searchTab.active)
+                this._searchTab.reset();
+            else
+                Main.overview.hide();
             return true;
-        } else if (modifiers & Clutter.ModifierType.CONTROL_MASK) {
-            if (symbol == Clutter.Page_Up) {
-                if (!this._searchTab.active)
+        } else if (Clutter.keysym_to_unicode(symbol) ||
+                   (symbol == Clutter.BackSpace && this._searchTab.active)) {
+            this._searchTab.startSearch(event);
+        } else if (!this._searchTab.active) {
+            if (modifiers & Clutter.ModifierType.CONTROL_MASK) {
+                if (symbol == Clutter.Page_Up) {
                     this._prevTab();
-                return true;
-            } else if (symbol == Clutter.Page_Down) {
-                if (!this._searchTab.active)
+                    return true;
+                } else if (symbol == Clutter.Page_Down) {
                     this._nextTab();
+                    return true;
+                }
+            } else if (symbol == Clutter.Tab) {
+                this._activeTab.page.navigate_focus(null, Gtk.DirectionType.TAB_FORWARD, false);
+                return true;
+            } else if (symbol == Clutter.ISO_Left_Tab) {
+                this._activeTab.page.navigate_focus(null, Gtk.DirectionType.TAB_BACKWARD, false);
                 return true;
             }
-        } else if (Clutter.keysym_to_unicode(symbol)) {
-            this._searchTab.startSearch(event);
         }
         return false;
     },
@@ -577,5 +594,5 @@ ViewSelector.prototype = {
     removeSearchProvider: function(provider) {
         this._searchTab.removeSearchProvider(provider);
     }
-};
+});
 Signals.addSignalMethods(ViewSelector.prototype);

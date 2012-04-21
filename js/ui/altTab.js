@@ -2,17 +2,19 @@
 
 const Clutter = imports.gi.Clutter;
 const Gdk = imports.gi.Gdk;
+const Gtk = imports.gi.Gtk;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const Meta = imports.gi.Meta;
 const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 
 const Main = imports.ui.main;
 const Tweener = imports.ui.tweener;
 
-const POPUP_APPICON_SIZE = 100;
+const POPUP_APPICON_SIZE = 96;
 const POPUP_SCROLL_TIME = 0.10; // seconds
 const POPUP_DELAY_TIMEOUT = 150; // milliseconds
 const POPUP_FADE_OUT_TIME = 0.1; // seconds
@@ -43,11 +45,9 @@ function primaryModifier(mask) {
     return primary;
 }
 
-function AltTabPopup() {
-    this._init();
-}
+const AltTabPopup = new Lang.Class({
+    Name: 'AltTabPopup',
 
-AltTabPopup.prototype = {
     _init : function() {
         this.actor = new Shell.GenericContainer({ name: 'altTabPopup',
                                                   reactive: true,
@@ -127,7 +127,7 @@ AltTabPopup.prototype = {
             if (childBox.x2 > primary.x + primary.width - rightPadding)
                 childBox.x2 = primary.x + primary.width - rightPadding;
             childBox.y1 = this._appSwitcher.actor.allocation.y2 + spacing;
-            this._thumbnails.addClones(primary.height - bottomPadding - childBox.y1);
+            this._thumbnails.addClones(primary.y + primary.height - bottomPadding - childBox.y1);
             let [childMinHeight, childNaturalHeight] = this._thumbnails.actor.get_preferred_height(-1);
             childBox.y2 = childBox.y1 + childNaturalHeight;
             this._thumbnails.actor.allocate(childBox, flags);
@@ -141,7 +141,7 @@ AltTabPopup.prototype = {
 
         let screen = global.screen;
         let display = screen.get_display();
-        let windows = display.get_tab_list(Meta.TabList.NORMAL, screen,
+        let windows = display.get_tab_list(Meta.TabList.NORMAL_ALL, screen,
                                            screen.get_active_workspace());
 
         // windows is only the windows on the current workspace. For
@@ -170,8 +170,12 @@ AltTabPopup.prototype = {
         if (localApps.length == 0 && otherApps.length == 0)
             return false;
 
-        if (!Main.pushModal(this.actor))
-            return false;
+        if (!Main.pushModal(this.actor)) {
+            // Probably someone else has a pointer grab, try again with keyboard only
+            if (!Main.pushModal(this.actor, global.get_current_time(), Meta.ModalOptions.POINTER_ALREADY_GRABBED)) {
+                return false;
+            }
+        }
         this._haveModal = true;
         this._modifierMask = primaryModifier(mask);
 
@@ -195,7 +199,7 @@ AltTabPopup.prototype = {
         this.actor.get_allocation_box();
 
         // Make the initial selection
-        if (binding == 'switch_group') {
+        if (binding == 'switch-group') {
             if (backward) {
                 this._select(0, this._appIcons[0].cachedWindows.length - 1);
             } else {
@@ -204,9 +208,9 @@ AltTabPopup.prototype = {
                 else
                     this._select(0, 0);
             }
-        } else if (binding == 'switch_group_backward') {
+        } else if (binding == 'switch-group-backward') {
             this._select(0, this._appIcons[0].cachedWindows.length - 1);
-        } else if (binding == 'switch_windows_backward') {
+        } else if (binding == 'switch-windows-backward') {
             this._select(this._appIcons.length - 1);
         } else if (this._appIcons.length == 1) {
             this._select(0);
@@ -262,7 +266,7 @@ AltTabPopup.prototype = {
 
     _keyPressEvent : function(actor, event) {
         let keysym = event.get_key_symbol();
-        let event_state = Shell.get_event_state(event);
+        let event_state = event.get_state();
         let backwards = event_state & Clutter.ModifierType.SHIFT_MASK;
         let action = global.display.get_keybinding_action(event.get_key_code(), event_state);
 
@@ -515,6 +519,7 @@ AltTabPopup.prototype = {
                                                         })
                          });
         this._thumbnails = null;
+        this._appSwitcher._items[this._currentApp].remove_accessible_state (Atk.StateType.EXPANDED);
     },
 
     _createThumbnails : function() {
@@ -535,14 +540,14 @@ AltTabPopup.prototype = {
                            transition: 'easeOutQuad',
                            onComplete: Lang.bind(this, function () { this.thumbnailsVisible = true; })
                          });
+
+        this._appSwitcher._items[this._currentApp].add_accessible_state (Atk.StateType.EXPANDED);
     }
-};
+});
 
-function SwitcherList(squareItems) {
-    this._init(squareItems);
-}
+const SwitcherList = new Lang.Class({
+    Name: 'SwitcherList',
 
-SwitcherList.prototype = {
     _init : function(squareItems) {
         this.actor = new Shell.GenericContainer({ style_class: 'switcher-list' });
         this.actor.connect('get-preferred-width', Lang.bind(this, this._getPreferredWidth));
@@ -561,14 +566,14 @@ SwitcherList.prototype = {
         this._list.connect('get-preferred-height', Lang.bind(this, this._getPreferredHeight));
         this._list.connect('allocate', Lang.bind(this, this._allocate));
 
-        this._clipBin = new St.Bin({style_class: 'cbin'});
-        this._clipBin.child = this._list;
-        this.actor.add_actor(this._clipBin);
+        this._scrollView = new St.ScrollView({ style_class: 'hfade',
+                                               enable_mouse_scrolling: false });
+        this._scrollView.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER);
 
-        this._leftGradient = new St.BoxLayout({style_class: 'thumbnail-scroll-gradient-left', vertical: true});
-        this._rightGradient = new St.BoxLayout({style_class: 'thumbnail-scroll-gradient-right', vertical: true});
-        this.actor.add_actor(this._leftGradient);
-        this.actor.add_actor(this._rightGradient);
+        let scrollBox = new St.BoxLayout();
+        scrollBox.add_actor(this._list);
+        this._scrollView.add_actor(scrollBox);
+        this.actor.add_actor(this._scrollView);
 
         // Those arrows indicate whether scrolling in one direction is possible
         this._leftArrow = new St.DrawingArea({ style_class: 'switcher-arrow',
@@ -599,21 +604,9 @@ SwitcherList.prototype = {
         let childBox = new Clutter.ActorBox();
         let scrollable = this._minSize > box.x2 - box.x1;
 
-        this._clipBin.allocate(box, flags);
-
-        childBox.x1 = 0;
-        childBox.y1 = 0;
-        childBox.x2 = this._leftGradient.width;
-        childBox.y2 = this.actor.height;
-        this._leftGradient.allocate(childBox, flags);
-        this._leftGradient.opacity = (this._scrollableLeft && scrollable) ? 255 : 0;
-
-        childBox.x1 = (this.actor.allocation.x2 - this.actor.allocation.x1) - this._rightGradient.width;
-        childBox.y1 = 0;
-        childBox.x2 = childBox.x1 + this._rightGradient.width;
-        childBox.y2 = this.actor.height;
-        this._rightGradient.allocate(childBox, flags);
-        this._rightGradient.opacity = (this._scrollableRight && scrollable) ? 255 : 0;
+        box.y1 -= this.actor.get_theme_node().get_padding(St.Side.TOP);
+        box.y2 += this.actor.get_theme_node().get_padding(St.Side.BOTTOM);
+        this._scrollView.allocate(box, flags);
 
         let arrowWidth = Math.floor(leftPadding / 3);
         let arrowHeight = arrowWidth * 2;
@@ -622,7 +615,7 @@ SwitcherList.prototype = {
         childBox.x2 = childBox.x1 + arrowWidth;
         childBox.y2 = childBox.y1 + arrowHeight;
         this._leftArrow.allocate(childBox, flags);
-        this._leftArrow.opacity = this._leftGradient.opacity;
+        this._leftArrow.opacity = (this._scrollableLeft && scrollable) ? 255 : 0;
 
         arrowWidth = Math.floor(rightPadding / 3);
         arrowHeight = arrowWidth * 2;
@@ -631,7 +624,7 @@ SwitcherList.prototype = {
         childBox.x2 = childBox.x1 + arrowWidth;
         childBox.y2 = childBox.y1 + arrowHeight;
         this._rightArrow.allocate(childBox, flags);
-        this._rightArrow.opacity = this._rightGradient.opacity;
+        this._rightArrow.opacity = (this._scrollableRight && scrollable) ? 255 : 0;
     },
 
     addItem : function(item, label) {
@@ -648,6 +641,8 @@ SwitcherList.prototype = {
         bbox.label_actor = label;
 
         this._items.push(bbox);
+
+        return bbox;
     },
 
     _onItemClicked: function (index) {
@@ -679,47 +674,66 @@ SwitcherList.prototype = {
                 this._items[this._highlighted].add_style_pseudo_class('selected');
         }
 
+        let adjustment = this._scrollView.hscroll.adjustment;
+        let [value, lower, upper, stepIncrement, pageIncrement, pageSize] = adjustment.get_values();
         let [absItemX, absItemY] = this._items[index].get_transformed_position();
         let [result, posX, posY] = this.actor.transform_stage_point(absItemX, 0);
         let [containerWidth, containerHeight] = this.actor.get_transformed_size();
         if (posX + this._items[index].get_width() > containerWidth)
             this._scrollToRight();
-        else if (posX < 0)
+        else if (this._items[index].allocation.x1 - value < 0)
             this._scrollToLeft();
 
     },
 
     _scrollToLeft : function() {
-        let x = this._items[this._highlighted].allocation.x1;
+        let adjustment = this._scrollView.hscroll.adjustment;
+        let [value, lower, upper, stepIncrement, pageIncrement, pageSize] = adjustment.get_values();
+
+        let item = this._items[this._highlighted];
+
+        if (item.allocation.x1 < value)
+            value = Math.min(0, item.allocation.x1);
+        else if (item.allocation.x2 > value + pageSize)
+            value = Math.max(upper, item.allocation.x2 - pageSize);
+
         this._scrollableRight = true;
-        Tweener.addTween(this._list, { anchor_x: x,
-                                        time: POPUP_SCROLL_TIME,
-                                        transition: 'easeOutQuad',
-                                        onComplete: Lang.bind(this, function () {
-                                                                        if (this._highlighted == 0) {
-                                                                            this._scrollableLeft = false;
-                                                                            this.actor.queue_relayout();
-                                                                        }
-                                                             })
-                        });
+        Tweener.addTween(adjustment,
+                         { value: value,
+                           time: POPUP_SCROLL_TIME,
+                           transition: 'easeOutQuad',
+                           onComplete: Lang.bind(this, function () {
+                                if (this._highlighted == 0) {
+                                    this._scrollableLeft = false;
+                                    this.actor.queue_relayout();
+                                }
+                           })
+                          });
     },
 
     _scrollToRight : function() {
+        let adjustment = this._scrollView.hscroll.adjustment;
+        let [value, lower, upper, stepIncrement, pageIncrement, pageSize] = adjustment.get_values();
+
+        let item = this._items[this._highlighted];
+
+        if (item.allocation.x1 < value)
+            value = Math.max(0, item.allocation.x1);
+        else if (item.allocation.x2 > value + pageSize)
+            value = Math.min(upper, item.allocation.x2 - pageSize);
+
         this._scrollableLeft = true;
-        let monitor = Main.layoutManager.primaryMonitor;
-        let padding = this.actor.get_theme_node().get_horizontal_padding();
-        let parentPadding = this.actor.get_parent().get_theme_node().get_horizontal_padding();
-        let x = this._items[this._highlighted].allocation.x2 - monitor.width + padding + parentPadding;
-        Tweener.addTween(this._list, { anchor_x: x,
-                                        time: POPUP_SCROLL_TIME,
-                                        transition: 'easeOutQuad',
-                                        onComplete: Lang.bind(this, function () {
-                                                                        if (this._highlighted == this._items.length - 1) {
-                                                                            this._scrollableRight = false;
-                                                                            this.actor.queue_relayout();
-                                                                        }
-                                                             })
-                        });
+        Tweener.addTween(adjustment,
+                         { value: value,
+                           time: POPUP_SCROLL_TIME,
+                           transition: 'easeOutQuad',
+                           onComplete: Lang.bind(this, function () {
+                                if (this._highlighted == this._items.length - 1) {
+                                    this._scrollableRight = false;
+                                    this.actor.queue_relayout();
+                                }
+                            })
+                          });
     },
 
     _itemActivated: function(n) {
@@ -805,14 +819,6 @@ SwitcherList.prototype = {
 
         let primary = Main.layoutManager.primaryMonitor;
         let parentRightPadding = this.actor.get_parent().get_theme_node().get_padding(St.Side.RIGHT);
-        if (this.actor.allocation.x2 == primary.x + primary.width - parentRightPadding) {
-            if (this._squareItems)
-                childWidth = childHeight;
-            else {
-                let [childMin, childNat] = children[0].get_preferred_width(childHeight);
-                childWidth = childMin;
-            }
-        }
 
         for (let i = 0; i < children.length; i++) {
             if (this._items.indexOf(children[i]) != -1) {
@@ -838,24 +844,14 @@ SwitcherList.prototype = {
                 // we don't allocate it.
             }
         }
-
-        let leftPadding = this.actor.get_theme_node().get_padding(St.Side.LEFT);
-        let rightPadding = this.actor.get_theme_node().get_padding(St.Side.RIGHT);
-        let topPadding = this.actor.get_theme_node().get_padding(St.Side.TOP);
-        let bottomPadding = this.actor.get_theme_node().get_padding(St.Side.BOTTOM);
-
-        // Clip the area for scrolling
-        this._clipBin.set_clip(0, -topPadding, (this.actor.allocation.x2 - this.actor.allocation.x1) - leftPadding - rightPadding, this.actor.height + bottomPadding);
     }
-};
+});
 
 Signals.addSignalMethods(SwitcherList.prototype);
 
-function AppIcon(app) {
-    this._init(app);
-}
+const AppIcon = new Lang.Class({
+    Name: 'AppIcon',
 
-AppIcon.prototype = {
     _init: function(app) {
         this.app = app;
         this.actor = new St.BoxLayout({ style_class: 'alt-tab-app',
@@ -873,17 +869,14 @@ AppIcon.prototype = {
         this._iconBin.set_size(size, size);
         this._iconBin.child = this.icon;
     }
-};
+});
 
-function AppSwitcher() {
-    this._init.apply(this, arguments);
-}
-
-AppSwitcher.prototype = {
-    __proto__ : SwitcherList.prototype,
+const AppSwitcher = new Lang.Class({
+    Name: 'AppSwitcher',
+    Extends: SwitcherList,
 
     _init : function(localApps, otherApps, altTabPopup) {
-        SwitcherList.prototype._init.call(this, true);
+        this.parent(true);
 
         // Construct the AppIcons, add to the popup
         let activeWorkspace = global.screen.get_active_workspace();
@@ -962,7 +955,7 @@ AppSwitcher.prototype = {
 
     _allocate: function (actor, box, flags) {
         // Allocate the main list items
-        SwitcherList.prototype._allocate.call(this, actor, box, flags);
+        this.parent(actor, box, flags);
 
         let arrowHeight = Math.floor(this.actor.get_theme_node().get_padding(St.Side.BOTTOM) / 3);
         let arrowWidth = arrowHeight * 2;
@@ -1017,7 +1010,7 @@ AppSwitcher.prototype = {
                 this._arrows[this._curApp].remove_style_pseudo_class('highlighted');
         }
 
-        SwitcherList.prototype.highlight.call(this, n, justOutline);
+        this.parent(n, justOutline);
         this._curApp = n;
 
         if (this._curApp != -1) {
@@ -1030,7 +1023,7 @@ AppSwitcher.prototype = {
 
     _addIcon : function(appIcon) {
         this.icons.push(appIcon);
-        this.addItem(appIcon.actor, appIcon.label);
+        let item = this.addItem(appIcon.actor, appIcon.label);
 
         let n = this._arrows.length;
         let arrow = new St.DrawingArea({ style_class: 'switcher-arrow' });
@@ -1040,18 +1033,17 @@ AppSwitcher.prototype = {
 
         if (appIcon.cachedWindows.length == 1)
             arrow.hide();
+        else
+            item.add_accessible_state (Atk.StateType.EXPANDABLE);
     }
-};
+});
 
-function ThumbnailList(windows) {
-    this._init(windows);
-}
-
-ThumbnailList.prototype = {
-    __proto__ : SwitcherList.prototype,
+const ThumbnailList = new Lang.Class({
+    Name: 'ThumbnailList',
+    Extends: SwitcherList,
 
     _init : function(windows) {
-        SwitcherList.prototype._init.call(this);
+        this.parent(false);
 
         let activeWorkspace = global.screen.get_active_workspace();
 
@@ -1129,7 +1121,7 @@ ThumbnailList.prototype = {
         // Make sure we only do this once
         this._thumbnailBins = new Array();
     }
-};
+});
 
 function _drawArrow(area, side) {
     let themeNode = area.get_theme_node();

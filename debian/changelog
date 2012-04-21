@@ -1,264 +1,352 @@
-gnome-shell (3.2.2.1deepin-0) oneiric; urgency=low
+gnome-shell (3.4.1-0ubuntu2) precise-proposed; urgency=low
 
-  * Merge gnome-shell 3.2.2.1-0ubuntu0.1
+  * 10-make-NetworkManager-optional.patch:
+    - Disabled, it doesn't work right and isn't used for Ubuntu
+      architectures anyway.
+  * Refreshed patches
 
- -- Andy Stewart <andy@andy>  Tue, 20 Mar 2012 11:36:05 +0800
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 18 Apr 2012 00:34:57 -0400
 
-gnome-shell (3.2.2.1-0ubuntu0.1) oneiric-proposed; urgency=low
+gnome-shell (3.4.1-0ubuntu1) precise-proposed; urgency=low
 
-  [ Jeremy Bicha ]
-  * New upstream release (LP: #921343)
-    - Fix broken gnome-shell-extension-tool (LP: #853882)
-    - Fixes lots of crashes and some memory leaks
-    - extensions.gnome.org should now work with Webkit-based browsers
-  * Split common files and translations to gnome-shell-common. Add
+  * New upstream release.
+    - Fix crash that occurred when an icon theme change caused unexpected
+      reentrancy in the icon loading code, aka crash in magazine_
+      chain_pop_head() or _clutter_actor_finish_queue_redraw() (LP: #955845,
+      LP: #962298)
+    - Make gnome-shell-calendar-server initialize GTK+ so it can display
+      password prompts if needed
+    - Adapt to Mutter API change for keybinding addition
+    - Fix crash when an extension was installed as both a user extension
+      and a system extension
+    - Fix bug where chat entry could end up partially offscreen
+    - Fix problem where icons weren't updating when theme was changed
+    - Look for Evolution calendar settings in GSettings, not GConf
+    - Add Super+F10 keyboard shortcut to show the new application menu
+    - Fix %Id format characters to work in translations
+    - Fix error when NetworkManager restarts
+    - Improve efficiency of overview redraws by working around Clutter issue
+    - Other misc bug fixes
+  * debian/control.in:
+    - Bump minimum mutter to 3.4.1
+    - Depend on gir1.2-gjsdbus-1.0 instead of gir1.2-gjs-1.0
+  * Refreshed patches:
+    - 10-make-NetworkManager-optional.patch
+    - 20_revert_gcr_depend.patch
+    - 32_remove-shell-screen-grabber.patch
+  * debian/patches/21_revert_evolution_gsettings.patch:
+    - Revert support for Evolution 3.4 since we're sticking with
+      Evolution 3.2 for precise
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 17 Apr 2012 21:40:32 -0400
+
+gnome-shell (3.4.0-0ubuntu3) precise-proposed; urgency=low
+
+  * debian/patches: enable support for GLES compatible builds (LP: #935124)
+    - 30_use-glx-if-cogl-supports.patch: replace
+      04_remove-glx-dependency-on-armel.patch with a better solution from
+      upstream, that is to check the glx support with cogl
+    - 31_don-t-link-directly-to-libGL.patch: don't link directly to libGL, as
+      it's not needed anymore and breaks GLES support
+    - 32_remove-shell-screen-grabber.patch: remove shell-screen-grabber as
+      it's not needed anymore and breaks GLES support
+    - 33_remove_glx_headers.patch: don't generically include the GL headers
+  * debian/rules:
+    - Request it to run autoconf to update with the new options provided by
+      the additional patches
+  * debian/control.in:
+    - Adding autoconf at build-deps, requirement from above patches
+
+ -- Ricardo Salveti de Araujo <ricardo.salveti@linaro.org>  Thu, 12 Apr 2012 22:14:23 -0300
+
+gnome-shell (3.4.0-0ubuntu2) precise-proposed; urgency=low
+
+  * Rebuild to depend on mutter 3.4, not 3.3 (LP: #9662770)
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 27 Mar 2012 11:23:31 -0400
+
+gnome-shell (3.4.0-0ubuntu1) precise-proposed; urgency=low
+
+  * New upstream release.
+    - Don't crash when taking screenshots
+    - Fix dialog-resizing problem
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 26 Mar 2012 20:56:08 -0400
+
+gnome-shell (3.3.92-0ubuntu1) precise; urgency=low
+
+  * New upstream release.
+    - No longer affects the number of workspaces in Unity 2D (LP: #826089)
+  * debian/control.in: Bump minimum mutter to 3.3.92
+
+  [ Rico Tzschichholz ]
+  * debian/patches/20_revert_gcr_depend.patch:
+    - Revert dependency on gcr 3.3 since we're sticking with 3.2 for 12.04
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 22 Mar 2012 01:47:24 -0400
+
+gnome-shell (3.3.90-0ubuntu1) precise; urgency=low
+
+  * Sync with Debian experimental svn packaging (LP: #941755, #937709).
+    Remaining changes:
+    - debian/gnome-shell.gsettings-override: Update for Ubuntu defaults
+    - debian/control.in: Recommend cups-pk-helper
+    - debian/patches/10-make-NetworkManager-optional.patch: Disabled
+    - Don't run dh-autoreconf
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 14 Mar 2012 13:47:20 -0400
+
+gnome-shell (3.3.90-1) UNRELEASED; urgency=low
+
+  * New upstream release.
+  * debian/control.in:
+    - Add debug package
+    - Update dependencies
+    - Recommend gnome-user-guide
+    - Break gnome-tweak-tool (<< 3.3)
+    - Bump Standards-Version to 3.9.3
+  * debian/gnome-shell-common.install:
+    - No more gconf schemas to install
+    - Install gtk-docs
+  * Drop patches that have been applied upstream. Remaining patches:
+    - 04_remove-glx-dependency-on-armel.patch
+    - 10-make-NetworkManager-optional.patch (Refreshed)
+    - 11-no-gettext.patch
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 12 Mar 2012 19:36:07 -0400
+
+gnome-shell (3.2.2.1-2) unstable; urgency=low
+
+  * debian/patches/12_Replace-shell_util_icon_from_string.patch
+    + Added. Remove the neglected user of the removed
+      Shell.util_icon_from_string function. This caused subscription request
+      to not pop up (From upstream git)
+  * debian/patches/13_bluetooth_fix_undefined_variable.patch
+    + Added. Fixes bluetooth device status slider so it reflects reality again
+    (From upstream git)
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Tue, 28 Feb 2012 11:30:47 +0100
+
+gnome-shell (3.2.2.1-1) unstable; urgency=low
+
+  [ Michael Biebl ]
+  * debian/patches/10-make-NetworkManager-optional.patch: make NM
+    optional, to fix build on kFreeBSD architectures. Closes: #652482
+  * debian/patches/11-no-gettext.patch: remove gettext macros, otherwise
+    autoreconf fails due to incompatibilities with intltool.
+
+  [ Jordi Mallach ]
+  * Enable dh_autoreconf.
+  * Update Vcs-* URLs.
+
+  [ Josselin Mouette ]
+  * Update repository URL.
+
+  [ Michael Biebl ]
+  * New upstream release:
+    - Fix a crash in gnome-shell-extension-tool. Closes: #649583
+    - Remove 05-NetworkMenu-don-t-query-DBus-properties-of-removed-o.patch.
+    - Remove 06-NetworkMenu-fix-regression-in-access-point-removed.patch.
+    - Refresh 07-NetworkMenu-fix-logic-for-updating-wifi-icon.patch.
+  * debian/control.in: Bump dependency on python to (>= 2.6) since we require
+    JSON support. Closes: #580869
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 25 Jan 2012 11:06:41 +0100
+
+gnome-shell (3.2.1-8) unstable; urgency=low
+
+  [ Laurent Bigonville ]
+  * debian/control.in: Add Depends on telepathy-mission-control-5
+    (Closes: #651514)
+
+  [ Michael Biebl ]
+  * Upload to unstable.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 17 Dec 2011 06:34:55 +0100
+
+gnome-shell (3.2.1-7) experimental; urgency=low
+
+  * Fix version in Breaks/Replaces. Closes: #650927
+
+ -- Michael Biebl <biebl@debian.org>  Sun, 04 Dec 2011 21:19:25 +0100
+
+gnome-shell (3.2.1-6) experimental; urgency=low
+
+  [ Raphaël Hertzog ]
+  * Add Breaks against gnome-tweak-tool (<< 3.2) to force its upgrade to a
+    version that works with GNOME 3.2.
+
+  [ Josselin Mouette ]
+  * Split common files and translations in gnome-shell-common. Add 
     appropriate Breaks/Replaces.
-  * 02_rpath-bluetooth-applet.patch:
-    - Add an RPATH so that the compilation doesn't fail when g-ir-scanner
-      tries to analyze libgnome-shell.so linked against
-  * 04_remove-glx-dependency-on-armel.patch: Refactored
-  * 07-NetworkMenu-fix-logic-for-updating-wifi-icon.patch
-    - Fix the logic for connecting to the current wifi strength,
-      prevents the network icon from becoming stale (from upstream git)
-  * 08-polkit-Find-the-best-user-to-authenticate-as.patch:
-    - When picking a user to authenticate with, try the current user
-      first, then root and if all else fails the first user that is allowed to
-      authenticate. (from upstream git)
-  * 09-respect-NoDisplay-semantics-for-app-menu.patch:
+
+  [ Michael Biebl ]
+  * debian/watch:
+    - Track stable releases.
+  * debian/patches/09-respect-NoDisplay-semantics-for-app-menu.patch:
     - Respect NoDisplay semantics for applications menu. This avoids duplicate
       menu entries when menu-xdg is installed. Closes: #649559
 
-  [ Timo Kluck ]
-  * 10-bluetooth-fix-connection-from-gs-menu.patch:
-    - Fix bluetooth panel switch moving independently from actual
-      connection status (LP: #918208)
+ -- Michael Biebl <biebl@debian.org>  Sat, 03 Dec 2011 17:23:39 +0100
 
- -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 23 Jan 2012 14:25:45 -0500
+gnome-shell (3.2.1-5) experimental; urgency=low
 
-gnome-shell (3.2.1-0ubuntu1.1) oneiric-proposed; urgency=low
+  * debian/patches/06-polkit-Find-the-best-user-to-authenticate-as.patch:
+    + Added. When picking a user to authenticate with, try the current user
+      first, then root and if all else fails the first user that is allowed to
+      authenticate. (from upstream git)
 
-  * No-change rebuild to fix up dependencies (LP: #903382)
+ -- Sjoerd Simons <sjoerd@debian.org>  Sun, 20 Nov 2011 22:28:42 +0000
 
- -- Evan Broder <evan@ebroder.net>  Mon, 19 Dec 2011 23:13:06 -0800
+gnome-shell (3.2.1-4) experimental; urgency=low
 
-gnome-shell (3.2.1-0ubuntu1) oneiric-proposed; urgency=low
+  * 05-NetworkMenu-don-t-query-DBus-properties-of-removed-o.patch:
+    + Added. Don't (potentially) ask NM over D-Bus about an access point that
+      was just removed. (From upstream git). As a side-effect this fixes
+      gnome-shell freezing a while after unblacking.
+  * 06-NetworkMenu-fix-regression-in-access-point-removed.patch
+    + Added. Fix a regression in above patch (from upstream git)
+  * 07-NetworkMenu-fix-logic-for-updating-wifi-icon.patch
+    + Added. Fix the logic for connecting to the current wifi strength,
+      prevents the network icon fro mbecoming stale (from upstream git)
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sat, 19 Nov 2011 15:28:19 +0000
+
+gnome-shell (3.2.1-3) experimental; urgency=low
+
+  [ Josselin Mouette ]
+  * Break fglrx-driver (<< 1:11-10). Closes: #648280.
+
+  [ Sjoerd Simons ]
+  * debian/control.in: Recommend gnome-contacts
+  * debian/control.in: Update build-depends on the e-d-s libs to ensure we
+    build against the same version as the libfolks e-d-s backend.
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sun, 13 Nov 2011 16:40:12 +0100
+
+gnome-shell (3.2.1-2) experimental; urgency=low
+
+  * debian/control.in:
+    - Tighten Depends on gir1.2-mutter-3.0 and gir1.2-glib-2.0.
+      Closes: #646999
+    - Drop Build-Depends on libgnome-menu-dev.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 05 Nov 2011 21:35:14 +0100
+
+gnome-shell (3.2.1-1) experimental; urgency=low
+
+  [ Sjoerd Simons ]
+  * New upstream release
+  * debian/patches/00git-ShellRecorder-Use-cogl_read_pixels.patch:
+    + Dropped, fixed upstream
+  * debian/patches/03_hidden_applications.patch
+    + Dropped, fixed upstream
+  * debian/control.in: Add libfolks-dev build-depends
+  * debian/control.in: Add depends on gir1.2-accountsservice-1.0 and
+    gir1.2-caribou-1.0,
 
   [ Jeremy Bicha ]
-  * New upstream release (LP: #878672).
-    - Restore the IM state on startup - if you were available in when you
-      logged out, then you'll be set available again when you log in.
-    - Improve searching for contacts in the overview: search more fields,
-      show a more meaningful name, require that all search terms match.
-    - Improve search for applications in the overview: take frequency into
-      account and tweak match algorithm
-    - Remove the "Show Password" switch from network password prompts, and
-      move the functionality to a right-click menu
-    - Add context menus with Cut/Paste options to most entries
-    - Display a caps-lock warning in password entries
-    - Show the state of installed extensions in Looking Glass
-    - Load user extensions after system ones
-    - Fix problem with many applications showing extra-large icons in
-      notifications
-    - Fix a problem where alt-Tab had trouble tracking the current
-      application with certain applications such as Emacs.
-    - Fix confusion between different users avatar images
-    - Remove behavior where you could switch workspaces by bumping
-      a dragged window in the overview against a screen edge; it was
-      leftover and just confusing.
-    - Fix long-standing bug where the Dash in the overview could end up
-      mis-sized and run off the screen
-    - Fix automatic launching of applications when media is inserted
-    - Fix handling of vertically stacked monitors with NVIDIA drivers
-    - Translation marking fixes
-    - Code cleanups and warning fixes
-    - Small memory leak fixes
-    - On screen keyboard:
-      + Show the keyboard immediately when it's turned enabled
-      + Fix problem where keyboard would hide when starting to type
-        in the search entry
-      + Fix problem with keyboard hiding when selected accented characters
-    - Misc bug fixes
   * debian/control.in:
-    - Bump minimum mutter to 3.2.1
-    - Drop dependency against libdconf0 and let dh_installgsettings set
-      the right dependencies.
-    - Depends on cups-pk-helper instead of recommends to ensure that
-      the printer applet works (LP: #877367)
-  * 01_favorite_apps.patch: dropped, replaced by override file.
-  * New upstream release.
+    - Recommend gnome-session-fallback
+    - Bump minimum gjs & gobject-introspection versions
+    - Add gir1.2-soup-2.4 dependency
 
- -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 24 Oct 2011 06:43:05 +0200
+  [ Sjoerd Simons ]
+  * debian/gnome-shell.lintian-overrides:
+    + Updated (from Ubuntu). gnome-shell needs an rpath to find the private
+      bluetooth lib
 
-gnome-shell (3.2.0-0ubuntu1) oneiric; urgency=low
+ -- Sjoerd Simons <sjoerd@debian.org>  Fri, 28 Oct 2011 22:20:04 +0200
 
-  * New upstream stable release.
-    - Prevent the fallback on-screen keyboard from showing up while
-      GNOME Shell is running.
-    - Disable code to reposition windows around the on-screen keyboard;
-      it wasn't finished or working properly.
-    - Fix interaction between on-screen keyboard and notifications
-    - Fix menu-sizing problems in right-to-left locales.
-    - Update chat icons in the message tray when an avatar image changes
-    - Fix problem with empty notification bubbles being left.
-    - Fix problem with chat notifications bouncing when new messages come in.
-    - Fix bug that was causing SIP calls to automatically be accepted in some
-      circumstances.
-    - Fix string that should have been marked translatable.
-    - Fix a crash that could happen during CSS transitions.
-    - Build fixes.
-  * debian/control.in: Depend on caribou instead of gir-caribou-1.0
-    (LP: #858109)
+gnome-shell (3.0.2-8) unstable; urgency=low
 
- -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 28 Sep 2011 06:48:58 +0200
+  * debian/patches/05_fix_glib_2.30_compat.patch:
+    + Updated. Small mistake in the patch causes gnome-shell to fail to load
+      the dim window shared, instead of which it just hangs. Fixed now..
+      (Closes: 649459)
 
-gnome-shell (3.1.92-0ubuntu1) oneiric; urgency=low
+ -- Sjoerd Simons <sjoerd@debian.org>  Mon, 21 Nov 2011 15:19:48 +0000
 
-  [ Jeremy Bicha ]
-  * New upstream release.
-    - Adds browser plugin for installing, enabling, disabling, and
-      uninstalling shell extensions. (Note that extensions.gnome.org
-      isn't yet in operation.)
-    - Lots of bugfixes
+gnome-shell (3.0.2-7) unstable; urgency=low
+
+  * debian/patches/06-polkit-Find-the-best-user-to-authenticate-as.patch:
+    + Added. When picking a user to authenticate with, try the current user
+    first, then root and if all else fails the first user that is allowed to
+    authenticate. (from upstream git)
+  * debian/patches/07-Add-some-element-type-annotations-to-appease-g-i-mas.patch:
+    + Added. Add annotation to prevent warnings from new g-i (from upstream
+      git)
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sun, 20 Nov 2011 22:04:39 +0000
+
+gnome-shell (3.0.2-6) unstable; urgency=low
+
+  * debian/patches/05_fix_glib_2.30_compat.patch:
+    + Added. Fix compatibility with glib 2.30, which broke some things due to
+      GI annotation changes. (From upstream git)
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sat, 19 Nov 2011 15:04:45 +0000
+
+gnome-shell (3.0.2-5) unstable; urgency=low
+
+  [ Michael Biebl ]
+  * debian/rules:
+    - Make network-manager and gnome-bluetooth (build) dependencies linux-any.
+
+  [ Rico Tzschichholz ]
+  * Add 00git-ShellRecorder-Use-cogl_read_pixels.patch to fix FTBFS on arm
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 14 Oct 2011 17:22:55 +0200
+
+gnome-shell (3.0.2-4) unstable; urgency=low
+
+  [ Josselin Mouette ]
+  * Break gnome-session < 3.
+
+  [ Rico Tzschichholz ]
+  * Add 04_remove-glx-dependency-on-armel.patch to fix FTBFS on arm
+
+  [ Michael Biebl ]
+  * Upload to unstable.
+  * debian/watch: Switch to .xz tarballs.
   * debian/control.in:
-    - Depend on caribou libraries
-    - Recommend gnome-session-fallback, needed when graphics support
-      test fails (LP: #852950)
-    - Bump minimum gjs dependency to 1.29.18 and minimum mutter 
-      to 3.1.92
-  * debian/patches/01_favorite_apps.patch: Updated
-  * debian/patches/04_build-without-caribou.patch: Dropped
+    - Set pkg-gnome-maintainers@lists.alioth.debian.org as Maintainer.
+    - Bump Standards-Version to 3.9.2. No further changes.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 14 Oct 2011 12:56:37 +0200
+
+gnome-shell (3.0.2-3) experimental; urgency=low
+
+  * Re-add gnome-bluetooth dependency.
+
+ -- Josselin Mouette <joss@debian.org>  Mon, 19 Sep 2011 18:53:24 +0200
+
+gnome-shell (3.0.2-2) experimental; urgency=low
 
   [ Martin Pitt ]
-  * debian/control.in: Add libjson-glib-dev build dependency as per
-    configure.ac.
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 22 Sep 2011 08:50:45 +0200
-
-gnome-shell (3.1.90.1-0ubuntu4) oneiric; urgency=low
-
-  * debian/control.in
-    - Depend on gir1.2-accountsservice-1.0 since if it's missing,
-      Shell won't even run (LP: #845791)
-    - Also depend on libgudev-1.0-dev
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 09 Sep 2011 13:19:30 -0400
-
-gnome-shell (3.1.90.1-0ubuntu3) oneiric; urgency=low
-
-  * debian/control.in: Add Recommends: cups-pk-helper. This isn't necessary
-    under Unity, as we show/use system-config-printer there, but in the GNOME
-    session control-center shows the upstream printer applet. This is a
-    workaround for oneiric to avoid adding cups-pk-helper to main and the
-    default install after FF. (LP: #844864)
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Fri, 09 Sep 2011 17:54:50 +0200
-
-gnome-shell (3.1.90.1-0ubuntu2) oneiric; urgency=low
-
-  * debian/control.in:
-    - Build-depends on libgnome-menu-3-dev, libgnome-keyring-dev,
-      libfolks-dev
-    - Bumped minimum versions for gobject-introspection and 
-      libtelepathy-glib-dev build-depends
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 09 Sep 2011 00:04:55 -0400
-
-gnome-shell (3.1.90.1-0ubuntu1) oneiric; urgency=low
-
-  * New upstream release.
-  * debian/control: Bump build-depends on new mutter
-  * debian/patches/01_favorite_apps.patch: Updated
-  * debian/patches/03_remove-glx-dependency-on-armel.patch: Refreshed
-  * debian/patches/04_build-without-caribou.patch
-    - Build without caribou since Ubuntu uses onboard and our System 
-      Settings doesn't support choosing a different screen keyboard yet
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 07 Sep 2011 09:09:05 +0200
-
-gnome-shell (3.1.4-0ubuntu2) oneiric; urgency=low
-
-  * debian/patches/02_rpath-bluetooth-applet.patch:
-    - Drop, it isn't needed with libgnome-bluetooth-dev (>= 3.1.0)
-  * debian/patches/03_remove-glx-dependency-on-armel.patch:
-    - Remove GLX dependency on armel
-  * debian/control.in:
-    - Drop Build-dep on mesa-common-dev [armel]
-
- -- Rico Tzschichholz <ricotz@ubuntu.com>  Fri, 26 Aug 2011 08:49:11 +0200
-
-gnome-shell (3.1.4-0ubuntu1) oneiric; urgency=low
-
-  * New upstream release.
-  * debian/control:
-    - Build-depends on mesa-common-dev [armel]
-    - Depend on gir1.2-soup-2.4
-    - Bump libclutter, libgirepository, libgnome-bluetooth and libnm-glib
-      minimum versions
-    - Drop some redundant dependencies
-  * debian/patches/01_favorite_apps.patch: Updated
-  * debian/patches/03_power_dbus_name_change.patch: Dropped, upstream
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 26 Aug 2011 02:46:22 +0200
-
-gnome-shell (3.1.3-0ubuntu4) oneiric; urgency=low
-
-  * debian/control.in
-    - Bump build-depends on libgjs-dev & libtelepathy-glib-dev
-    - Recommend gnome-themes-standard (for Adwaita)
-
- -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 16 Aug 2011 23:24:00 -0400
-
-gnome-shell (3.1.3-0ubuntu3) oneiric; urgency=low
-
-  * debian/control.in: Add recommends to gnome-user-guide, so that installing
-    Shell also pulls in the corresponding help. (LP: #819158)
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Tue, 16 Aug 2011 10:26:20 +0200
-
-gnome-shell (3.1.3-0ubuntu2) oneiric; urgency=low
-
-  * debian/patches/03_power_dbus_name_change.patch: Backport upstream
-    commit to fix the disappearing power indicator.
-
- -- Bilal Akhtar <bilalakhtar@ubuntu.com>  Thu, 11 Aug 2011 14:20:10 +0300
-
-gnome-shell (3.1.3-0ubuntu1) oneiric; urgency=low
-
-  * New upstream release
-  * debian/control.in:
-    - Update dependency versions
-
- -- Michael Terry <mterry@ubuntu.com>  Wed, 20 Jul 2011 14:46:28 -0400
-
-gnome-shell (3.0.2-1ubuntu1) oneiric; urgency=low
-
-  * debian/control{,.in}: Change gir1.2-json-glib-1.0 build-dep to 
-    gir1.2-json-1.0 to reflect the binary rename in json-glib 
-    0.13.4-2
-
- -- Micah Gersten <micahg@ubuntu.com>  Thu, 14 Jul 2011 08:59:59 -0500
-
-gnome-shell (3.0.2-1svn2build1) oneiric; urgency=low
-
-  * No-change rebuild against latest libedataserverui-3.0-1.
-
- -- Bilal Akhtar <bilalakhtar@ubuntu.com>  Wed, 13 Jul 2011 13:07:17 +0300
-
-gnome-shell (3.0.2-1svn2) oneiric; urgency=low
-
-  * No-change rebuild against libgnome-desktop-3-2.
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Sun, 26 Jun 2011 10:28:18 +0200
-
-gnome-shell (3.0.2-1svn1) oneiric; urgency=low
-
-  Upload current Debian packaging svn head. No Ubuntu specific delta, thus
-  keeping version number auto-syncable.
-
   * debian/control.in, debian/rules: When building on Ubuntu, add a dependency
     to gnome-icon-theme-full.
+  * debian/control.in: Change gir1.2-json-glib-1.0 build-dep to 
+    gir1.2-json-1.0 to reflect the binary rename in json-glib 
+    0.13.4-2. Thanks Micah Gersten!
 
- -- Martin Pitt <martin.pitt@ubuntu.com>  Fri, 24 Jun 2011 09:36:33 +0200
+  [ Laurent Bigonville ]
+  * debian/control.in:
+    - Drop dependency against libdconf0 and let dh_installgsettings set
+      the right dependencies.
+    - Make gnome-shell Recommends gnome-themes-standard (for Adwaita)
+  * debian/compat: Bump debhelper compatibility to 8
+
+  [ Josselin Mouette ]
+  * 03_hidden_applications.patch: do not show NoDisplay=true submenus 
+    and applications. This will avoid showing the Debian menu while 
+    asked not to. Closes: #557997.
+  * 01_favorite_apps.patch: dropped, replaced by override file.
+  * Add libreoffice and yelp to favorite applications.
+  * Drop useless build-dependency on libwnck.
+  * Massive cleanup in build-dependencies.
+
+ -- Josselin Mouette <joss@debian.org>  Mon, 19 Sep 2011 16:36:48 +0200
 
 gnome-shell (3.0.2-1) experimental; urgency=low
 

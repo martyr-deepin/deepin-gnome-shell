@@ -16,8 +16,9 @@
       <_summary>Uuids of extensions to enable</_summary>
       <_description>
         GNOME Shell extensions have a uuid property; this key lists extensions
-        which should be loaded.  disabled-extensions overrides this setting for
-        extensions that appear in both lists.
+        which should be loaded. Any extension that wants to be loaded needs
+        to be in this list. You can also manipulate this list with the
+        EnableExtension and DisableExtension DBus methods on org.gnome.Shell.
       </_description>
     </key>
     <key name="enable-app-monitoring" type="b">
@@ -52,15 +53,18 @@
     </key>
     <key name="saved-im-presence" type="i">
       <default>1</default>
-      <_summary></_summary>
+      <_summary>Internally used to store the last IM presence explicitly set by the user. The
+value here is from the TpConnectionPresenceType enumeration.</_summary>
     </key>
     <key name="saved-session-presence" type="i">
       <default>0</default>
-      <_summary></_summary>
+      <_summary>Internally used to store the last session presence status for the user. The
+value here is from the GsmPresenceStatus enumeration.</_summary>
     </key>
     <child name="clock" schema="org.gnome.shell.clock"/>
     <child name="calendar" schema="org.gnome.shell.calendar"/>
     <child name="recorder" schema="org.gnome.shell.recorder"/>
+    <child name="keybindings" schema="org.gnome.shell.keybindings"/>
     <child name="keyboard" schema="org.gnome.shell.keyboard"/>
   </schema>
 
@@ -73,6 +77,17 @@
         If true, display the ISO week date in the calendar.
       </_description>
       </key>
+  </schema>
+
+  <schema id="org.gnome.shell.keybindings" path="/org/gnome/shell/keybindings/"
+          gettext-domain="@GETTEXT_PACKAGE@">
+    <key name="open-application-menu" type="as">
+      <default>["&lt;Super&gt;F10"]</default>
+      <_summary>Keybinding to open the application menu</_summary>
+      <_description>
+        Keybinding to open the application menu.
+      </_description>
+    </key>
   </schema>
 
   <schema id="org.gnome.shell.keyboard" path="/org/gnome/shell/keyboard/"
@@ -107,7 +122,7 @@
   <schema id="org.gnome.shell.recorder" path="/org/gnome/shell/recorder/"
           gettext-domain="@GETTEXT_PACKAGE@">
     <key name="framerate" type="i">
-      <default>15</default>
+      <default>30</default>
       <_summary>Framerate used for recording screencasts.</_summary>
       <_description>
         The framerate of the resulting screencast recordered
@@ -126,7 +141,7 @@
         take care of its own output - this might be used to send the output
         to an icecast server via shout2send or similar. When unset or set
         to an empty value, the default pipeline will be used. This is currently
-        'videorate ! vp8enc quality=10 speed=2 threads=%T ! queue ! webmmux'
+        'vp8enc quality=8 speed=6 threads=%T ! queue ! webmmux'
         and records to WEBM using the VP8 codec. %T is used as a placeholder
         for a guess at the optimal thread count on the system.
       </_description>
@@ -139,6 +154,50 @@
         based on the current date, and use this extension. It should be
         changed when recording to a different container format.
       </_description>
+    </key>
+  </schema>
+
+  <schema id="org.gnome.shell.overrides" path="/org/gnome/shell/overrides/">
+    <key name="attach-modal-dialogs" type="b">
+      <default>true</default>
+      <summary>Attach modal dialog to the parent window</summary>
+      <description>
+        This key overrides the key in org.gnome.mutter when running
+        GNOME Shell.
+      </description>
+    </key>
+
+    <key name="button-layout" type="s">
+      <default>":close"</default>
+      <summary>Arrangement of buttons on the titlebar</summary>
+      <description>
+        This key overrides the key in org.gnome.desktop.wm.preferences when
+        running GNOME Shell.
+      </description>
+    </key>
+
+    <key name="edge-tiling" type="b">
+      <default>true</default>
+      <summary>Enable edge tiling when dropping windows on screen edges</summary>
+      <description>
+        This key overrides the key in org.gnome.mutter when running GNOME Shell.
+      </description>
+    </key>
+
+    <key name="dynamic-workspaces" type="b">
+      <default>true</default>
+      <summary>Workspaces are managed dynamically</summary>
+      <description>
+        This key overrides the key in org.gnome.mutter when running GNOME Shell.
+      </description>
+    </key>
+
+    <key name="workspaces-only-on-primary" type="b">
+      <default>true</default>
+      <summary>Workspaces only on primary monitor</summary>
+      <description>
+        This key overrides the key in org.gnome.mutter when running GNOME Shell.
+      </description>
     </key>
   </schema>
 </schemalist>

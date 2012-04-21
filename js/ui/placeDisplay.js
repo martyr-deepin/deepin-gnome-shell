@@ -22,11 +22,9 @@ const Util = imports.misc.util;
  * @iconFactory: A JavaScript callback which will create an icon texture given a size parameter
  * @launch: A JavaScript callback to launch the entry
  */
-function PlaceInfo(id, name, iconFactory, launch) {
-    this._init(id, name, iconFactory, launch);
-}
+const PlaceInfo = new Lang.Class({
+    Name: 'PlaceInfo',
 
-PlaceInfo.prototype = {
     _init: function(id, name, iconFactory, launch) {
         this.id = id;
         this.name = name;
@@ -55,7 +53,7 @@ PlaceInfo.prototype = {
     isRemovable: function() {
         return false;
     }
-};
+});
 
 // Helper function to translate launch parameters into a GAppLaunchContext
 function _makeLaunchContext(params)
@@ -72,12 +70,9 @@ function _makeLaunchContext(params)
     return launchContext;
 }
 
-function PlaceDeviceInfo(mount) {
-    this._init(mount);
-}
-
-PlaceDeviceInfo.prototype = {
-    __proto__: PlaceInfo.prototype,
+const PlaceDeviceInfo = new Lang.Class({
+    Name: 'PlaceDeviceInfo',
+    Extends: PlaceInfo,
 
     _init: function(mount) {
         this._mount = mount;
@@ -123,13 +118,11 @@ PlaceDeviceInfo.prototype = {
                                      _("Retry"));
         }
     }
-};
+});
 
-function PlacesManager() {
-    this._init();
-}
+const PlacesManager = new Lang.Class({
+    Name: 'PlacesManager',
 
-PlacesManager.prototype = {
     _init: function() {
         this._defaultPlaces = [];
         this._mounts = [];
@@ -162,9 +155,12 @@ PlacesManager.prototype = {
 
         this._connect = new PlaceInfo('special:connect', _("Connect to..."),
             function (size) {
-                return new St.Icon({ icon_name: 'applications-internet',
-                                     icon_type: St.IconType.FULLCOLOR,
-                                     icon_size: size });
+                // do NOT use St.Icon here, it crashes the shell
+                // see wanda.js for details
+                return St.TextureCache.get_default().load_icon_name(null,
+                                                                    'applications-internet',
+                                                                    St.IconType.FULLCOLOR,
+                                                                    size);
             },
             function (params) {
                 // BUG: nautilus-connect-server doesn't have a desktop file, so we can't
@@ -195,9 +191,9 @@ PlacesManager.prototype = {
 
         this._bookmarksPath = GLib.build_filenamev([GLib.get_home_dir(), '.gtk-bookmarks']);
         this._bookmarksFile = Gio.file_new_for_path(this._bookmarksPath);
-        let monitor = this._bookmarksFile.monitor_file(Gio.FileMonitorFlags.NONE, null);
+        this._monitor = this._bookmarksFile.monitor_file(Gio.FileMonitorFlags.NONE, null);
         this._bookmarkTimeoutId = 0;
-        monitor.connect('changed', Lang.bind(this, function () {
+        this._monitor.connect('changed', Lang.bind(this, function () {
             if (this._bookmarkTimeoutId > 0)
                 return;
             /* Defensive event compression */
@@ -360,31 +356,32 @@ PlacesManager.prototype = {
     _removeById: function(sourceArray, id) {
         sourceArray.splice(this._lookupIndexById(sourceArray, id), 1);
     }
-};
+});
 Signals.addSignalMethods(PlacesManager.prototype);
 
-
-function PlaceSearchProvider() {
-    this._init();
-}
-
-PlaceSearchProvider.prototype = {
-    __proto__: Search.SearchProvider.prototype,
+const PlaceSearchProvider = new Lang.Class({
+    Name: 'PlaceSearchProvider',
+    Extends: Search.SearchProvider,
 
     _init: function() {
-        Search.SearchProvider.prototype._init.call(this, _("PLACES & DEVICES"));
+        this.parent(_("PLACES & DEVICES"));
     },
 
-    getResultMeta: function(resultId) {
-        let placeInfo = Main.placesManager.lookupPlaceById(resultId);
-        if (!placeInfo)
-            return null;
-        return { 'id': resultId,
-                 'name': placeInfo.name,
-                 'createIcon': function(size) {
-                                   return placeInfo.iconFactory(size);
-                               }
-               };
+    getResultMetas: function(resultIds) {
+        let metas = [];
+        for (let i = 0; i < resultIds.length; i++) {
+            let placeInfo = Main.placesManager.lookupPlaceById(resultIds[i]);
+            if (!placeInfo)
+                metas.push(null);
+            else
+                metas.push({ 'id': resultIds[i],
+                             'name': placeInfo.name,
+                             'createIcon': function(size) {
+                                 return placeInfo.iconFactory(size);
+                             }
+                           });
+        }
+        return metas;
     },
 
     activateResult: function(id, params) {
@@ -434,4 +431,4 @@ PlaceSearchProvider.prototype = {
         let places = previousResults.map(function (id) { return Main.placesManager.lookupPlaceById(id); });
         return this._searchPlaces(places, terms);
     }
-};
+});

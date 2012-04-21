@@ -8,6 +8,7 @@ const Cairo = imports.cairo;
 const Clutter = imports.gi.Clutter;
 const Shell = imports.gi.Shell;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 
 const Params = imports.misc.params;
 const Util = imports.misc.util;
@@ -40,12 +41,9 @@ function _onVertSepRepaint (area)
     cr.stroke();
 };
 
-function DateMenuButton() {
-    this._init.apply(this, arguments);
-}
-
-DateMenuButton.prototype = {
-    __proto__: PanelMenu.Button.prototype,
+const DateMenuButton = new Lang.Class({
+    Name: 'DateMenuButton',
+    Extends: PanelMenu.Button,
 
     _init: function(params) {
         params = Params.parse(params, { showEvents: true });
@@ -55,9 +53,14 @@ DateMenuButton.prototype = {
         let vbox;
 
         let menuAlignment = 0.25;
-        if (St.Widget.get_default_direction() == St.TextDirection.RTL)
+        if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
             menuAlignment = 1.0 - menuAlignment;
-        PanelMenu.Button.prototype._init.call(this, menuAlignment);
+        this.parent(menuAlignment);
+
+        // At this moment calendar menu is not keyboard navigable at
+        // all (so not accessible), so it doesn't make sense to set as
+        // role ATK_ROLE_MENU like other elements of the panel.
+        this.actor.accessible_role = Atk.Role.LABEL;
 
         this._clock = new St.Label();
         this.actor.add_actor(this._clock);
@@ -72,6 +75,7 @@ DateMenuButton.prototype = {
 
         // Date
         this._date = new St.Label();
+        this.actor.label_actor = this._date;
         this._date.style_class = 'datemenu-date-label';
         vbox.add(this._date);
 
@@ -112,12 +116,12 @@ DateMenuButton.prototype = {
             item = new St.DrawingArea({ style_class: 'calendar-vertical-separator',
                                         pseudo_class: 'highlighted' });
             item.connect('repaint', Lang.bind(this, _onVertSepRepaint));
-            // hbox.add(item);
+            hbox.add(item);
 
             // Fill up the second column
             vbox = new St.BoxLayout({name:     'calendarEventsArea',
                                      vertical: true});
-            // hbox.add(vbox, { expand: true });
+            hbox.add(vbox, { expand: true });
 
             // Event list
             vbox.add(this._eventList.actor, { expand: true });
@@ -180,26 +184,26 @@ DateMenuButton.prototype = {
                 if (showDate)
                     /* Translators: This is the time format with date used
                        in 24-hour mode. */
-                    clockFormat = showSeconds ? _("%b %e, %R:%S")
-                                              : _("%b %e, %R");
+                    clockFormat = showSeconds ? _("%a %b %e, %R:%S")
+                                              : _("%a %b %e, %R");
                 else
                     /* Translators: This is the time format without date used
                        in 24-hour mode. */
-                    clockFormat = showSeconds ? _("%R:%S")
-                                              : _("%R");
+                    clockFormat = showSeconds ? _("%a %R:%S")
+                                              : _("%a %R");
                 break;
             case '12h':
             default:
                 if (showDate)
                     /* Translators: This is a time format with date used
                        for AM/PM. */
-                    clockFormat = showSeconds ? _("%b %e, %l:%M:%S %p")
-                                              : _("%b %e, %l:%M %p");
+                    clockFormat = showSeconds ? _("%a %b %e, %l:%M:%S %p")
+                                              : _("%a %b %e, %l:%M %p");
                 else
                     /* Translators: This is a time format without date used
                        for AM/PM. */
-                    clockFormat = showSeconds ? _("%l:%M:%S %p")
-                                              : _("%l:%M %p");
+                    clockFormat = showSeconds ? _("%a %l:%M:%S %p")
+                                              : _("%a %l:%M %p");
                 break;
         }
 
@@ -239,4 +243,4 @@ DateMenuButton.prototype = {
             }
         }
     }
-};
+});

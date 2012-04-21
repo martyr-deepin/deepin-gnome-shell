@@ -8,6 +8,7 @@
  * Copyright 2009 Abderrahim Kitouni
  * Copyright 2009, 2010 Florian Müllner
  * Copyright 2010 Adel Gadllah
+ * Copyright 2012 Igalia, S.L.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU Lesser General Public License,
@@ -35,16 +36,15 @@
 #include "st-widget.h"
 
 #include "st-label.h"
-#include "st-marshal.h"
 #include "st-private.h"
 #include "st-texture-cache.h"
 #include "st-theme-context.h"
-#include "st-tooltip.h"
 #include "st-theme-node-transition.h"
 
 #include "st-widget-accessible.h"
 
 #include <gtk/gtk.h>
+#include <atk/atk-enum-types.h>
 
 /*
  * Forward declaration for sake of StWidgetChild
@@ -58,11 +58,8 @@ struct _StWidgetPrivate
   gchar        *inline_style;
 
   StThemeNodeTransition *transition_animation;
-  guint tooltip_timeout_id;
 
   gboolean      is_stylable : 1;
-  gboolean      has_tooltip : 1;
-  gboolean      show_tooltip : 1;
   gboolean      is_style_dirty : 1;
   gboolean      draw_bg_color : 1;
   gboolean      draw_border_internal : 1;
@@ -70,13 +67,18 @@ struct _StWidgetPrivate
   gboolean      hover : 1;
   gboolean      can_focus : 1;
 
-  StTooltip    *tooltip;
-
-  StTextDirection   direction;
-
   AtkObject *accessible;
+  AtkRole accessible_role;
+  AtkStateSet *local_state_set;
 
   ClutterActor *label_actor;
+  gchar        *accessible_name;
+
+  /* Even though Clutter has first_child/last_child properties,
+   * we need to keep track of the old first/last children so
+   * that we can remove the pseudo classes on them. */
+  StWidget *prev_last_child;
+  StWidget *prev_first_child;
 };
 
 /**
@@ -99,12 +101,12 @@ enum
   PROP_STYLE_CLASS,
   PROP_STYLE,
   PROP_STYLABLE,
-  PROP_HAS_TOOLTIP,
-  PROP_TOOLTIP_TEXT,
   PROP_TRACK_HOVER,
   PROP_HOVER,
   PROP_CAN_FOCUS,
-  PROP_LABEL_ACTOR
+  PROP_LABEL_ACTOR,
+  PROP_ACCESSIBLE_ROLE,
+  PROP_ACCESSIBLE_NAME
 };
 
 enum
@@ -119,7 +121,7 @@ static guint signals[LAST_SIGNAL] = { 0, };
 
 gfloat st_slow_down_factor = 1.0;
 
-G_DEFINE_ABSTRACT_TYPE (StWidget, st_widget, CLUTTER_TYPE_ACTOR);
+G_DEFINE_TYPE (StWidget, st_widget, CLUTTER_TYPE_ACTOR);
 
 #define ST_WIDGET_GET_PRIVATE(obj)    (G_TYPE_INSTANCE_GET_PRIVATE ((obj), ST_TYPE_WIDGET, StWidgetPrivate))
 
@@ -130,10 +132,6 @@ static gboolean st_widget_real_navigate_focus (StWidget         *widget,
                                                GtkDirectionType  direction);
 
 static AtkObject * st_widget_get_accessible (ClutterActor *actor);
-
-static void st_widget_start_tooltip_timeout (StWidget *widget);
-static void st_widget_do_show_tooltip (StWidget *widget);
-static void st_widget_do_hide_tooltip (StWidget *widget);
 
 static void
 st_widget_set_property (GObject      *gobject,
@@ -169,14 +167,6 @@ st_widget_set_property (GObject      *gobject,
         }
       break;
 
-    case PROP_HAS_TOOLTIP:
-      st_widget_set_has_tooltip (actor, g_value_get_boolean (value));
-      break;
-
-    case PROP_TOOLTIP_TEXT:
-      st_widget_set_tooltip_text (actor, g_value_get_string (value));
-      break;
-
     case PROP_TRACK_HOVER:
       st_widget_set_track_hover (actor, g_value_get_boolean (value));
       break;
@@ -191,6 +181,14 @@ st_widget_set_property (GObject      *gobject,
 
     case PROP_LABEL_ACTOR:
       st_widget_set_label_actor (actor, g_value_get_object (value));
+      break;
+
+    case PROP_ACCESSIBLE_ROLE:
+      st_widget_set_accessible_role (actor, g_value_get_enum (value));
+      break;
+
+    case PROP_ACCESSIBLE_NAME:
+      st_widget_set_accessible_name (actor, g_value_get_string (value));
       break;
 
     default:
@@ -230,14 +228,6 @@ st_widget_get_property (GObject    *gobject,
       g_value_set_boolean (value, priv->is_stylable);
       break;
 
-    case PROP_HAS_TOOLTIP:
-      g_value_set_boolean (value, priv->has_tooltip);
-      break;
-
-    case PROP_TOOLTIP_TEXT:
-      g_value_set_string (value, st_widget_get_tooltip_text (actor));
-      break;
-
     case PROP_TRACK_HOVER:
       g_value_set_boolean (value, priv->track_hover);
       break;
@@ -252,6 +242,14 @@ st_widget_get_property (GObject    *gobject,
 
     case PROP_LABEL_ACTOR:
       g_value_set_object (value, priv->label_actor);
+      break;
+
+    case PROP_ACCESSIBLE_ROLE:
+      g_value_set_enum (value, st_widget_get_accessible_role (actor));
+      break;
+
+    case PROP_ACCESSIBLE_NAME:
+      g_value_set_string (value, priv->accessible_name);
       break;
 
     default:
@@ -292,19 +290,6 @@ st_widget_dispose (GObject *gobject)
 
   st_widget_remove_transition (actor);
 
-  if (priv->tooltip_timeout_id)
-    {
-      g_source_remove (priv->tooltip_timeout_id);
-      priv->tooltip_timeout_id = 0;
-    }
-
-  if (priv->tooltip)
-    {
-      clutter_actor_destroy (CLUTTER_ACTOR (priv->tooltip));
-      g_object_unref (priv->tooltip);
-      priv->tooltip = NULL;
-    }
-
   /* The real dispose of this accessible is done on
    * AtkGObjectAccessible weak ref callback
    */
@@ -317,6 +302,9 @@ st_widget_dispose (GObject *gobject)
       priv->label_actor = NULL;
     }
 
+  g_clear_object (&priv->prev_first_child);
+  g_clear_object (&priv->prev_last_child);
+
   G_OBJECT_CLASS (st_widget_parent_class)->dispose (gobject);
 }
 
@@ -327,6 +315,8 @@ st_widget_finalize (GObject *gobject)
 
   g_free (priv->style_class);
   g_free (priv->pseudo_class);
+  g_object_unref (priv->local_state_set);
+  g_free (priv->accessible_name);
 
   G_OBJECT_CLASS (st_widget_parent_class)->finalize (gobject);
 }
@@ -340,17 +330,9 @@ st_widget_get_preferred_width (ClutterActor *self,
 {
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (self));
 
-  /* Most subclasses will override this and not chain down. However,
-   * if they do not, then we need to override ClutterActor's default
-   * behavior (request 0x0) to take CSS-specified minimums into
-   * account (which st_theme_node_adjust_preferred_width() will do.)
-   */
+  st_theme_node_adjust_for_width (theme_node, &for_height);
 
-  if (min_width_p)
-    *min_width_p = 0;
-
-  if (natural_width_p)
-    *natural_width_p = 0;
+  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->get_preferred_width (self, for_height, min_width_p, natural_width_p);
 
   st_theme_node_adjust_preferred_width (theme_node, min_width_p, natural_width_p);
 }
@@ -363,13 +345,9 @@ st_widget_get_preferred_height (ClutterActor *self,
 {
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (self));
 
-  /* See st_widget_get_preferred_width() */
+  st_theme_node_adjust_for_width (theme_node, &for_width);
 
-  if (min_height_p)
-    *min_height_p = 0;
-
-  if (natural_height_p)
-    *natural_height_p = 0;
+  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->get_preferred_height (self, for_width, min_height_p, natural_height_p);
 
   st_theme_node_adjust_preferred_height (theme_node, min_height_p, natural_height_p);
 }
@@ -379,53 +357,63 @@ st_widget_allocate (ClutterActor          *actor,
                     const ClutterActorBox *box,
                     ClutterAllocationFlags flags)
 {
-  StWidget *self = ST_WIDGET (actor);
-  StWidgetPrivate *priv = self->priv;
-  ClutterActorClass *klass;
-  ClutterGeometry area;
-  ClutterVertex in_v, out_v;
+  StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
+  ClutterActorBox content_box;
 
-  klass = CLUTTER_ACTOR_CLASS (st_widget_parent_class);
-  klass->allocate (actor, box, flags);
+  /* Note that we can't just chain up to clutter_actor_real_allocate --
+   * Clutter does some dirty tricks for backwards compatibility.
+   * Clutter also passes the actor's allocation directly to the layout
+   * manager, meaning that we can't modify it for children only.
+   */
 
-  /* update tooltip position */
-  if (priv->tooltip)
-    {
-      in_v.x = in_v.y = in_v.z = 0;
-      clutter_actor_apply_transform_to_point (actor, &in_v, &out_v);
-      area.x = out_v.x;
-      area.y = out_v.y;
+  clutter_actor_set_allocation (actor, box, flags);
 
-      in_v.x = box->x2 - box->x1;
-      in_v.y = box->y2 - box->y1;
-      clutter_actor_apply_transform_to_point (actor, &in_v, &out_v);
-      area.width = out_v.x - area.x;
-      area.height = out_v.y - area.y;
+  st_theme_node_get_content_box (theme_node, box, &content_box);
 
-      st_tooltip_set_tip_area (priv->tooltip, &area);
-    }
+  /* If we've chained up to here, we want to allocate the children using the
+   * currently installed layout manager */
+  clutter_layout_manager_allocate (clutter_actor_get_layout_manager (actor),
+                                   CLUTTER_CONTAINER (actor),
+                                   &content_box,
+                                   flags);
+}
+
+/**
+ * st_widget_paint_background:
+ * @widget: The #StWidget
+ *
+ * Paint the background of the widget. This is meant to be called by
+ * subclasses of StWiget that need to paint the background without
+ * painting children.
+ */
+void
+st_widget_paint_background (StWidget *widget)
+{
+  StThemeNode *theme_node;
+  ClutterActorBox allocation;
+  guint8 opacity;
+
+  theme_node = st_widget_get_theme_node (widget);
+
+  clutter_actor_get_allocation_box (CLUTTER_ACTOR (widget), &allocation);
+
+  opacity = clutter_actor_get_paint_opacity (CLUTTER_ACTOR (widget));
+
+  if (widget->priv->transition_animation)
+    st_theme_node_transition_paint (widget->priv->transition_animation,
+                                    &allocation,
+                                    opacity);
+  else
+    st_theme_node_paint (theme_node, &allocation, opacity);
 }
 
 static void
 st_widget_paint (ClutterActor *actor)
 {
-  StWidget *self = ST_WIDGET (actor);
-  StThemeNode *theme_node;
-  ClutterActorBox allocation;
-  guint8 opacity;
+  st_widget_paint_background (ST_WIDGET (actor));
 
-  theme_node = st_widget_get_theme_node (self);
-
-  clutter_actor_get_allocation_box (actor, &allocation);
-
-  opacity = clutter_actor_get_paint_opacity (actor);
-
-  if (self->priv->transition_animation)
-    st_theme_node_transition_paint (self->priv->transition_animation,
-                                    &allocation,
-                                    opacity);
-  else
-    st_theme_node_paint (theme_node, &allocation, opacity);
+  /* Chain up so we paint children. */
+  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->paint (actor);
 }
 
 static void
@@ -454,9 +442,6 @@ st_widget_map (ClutterActor *actor)
   CLUTTER_ACTOR_CLASS (st_widget_parent_class)->map (actor);
 
   st_widget_ensure_style (self);
-
-  if (self->priv->show_tooltip)
-    st_widget_do_show_tooltip (self);
 }
 
 static void
@@ -469,29 +454,22 @@ st_widget_unmap (ClutterActor *actor)
 
   if (priv->track_hover && priv->hover)
     st_widget_set_hover (self, FALSE);
-
-  st_widget_do_hide_tooltip (self);
-}
-
-static void notify_children_of_style_change (ClutterContainer *container);
-
-static void
-notify_children_of_style_change_foreach (ClutterActor *actor,
-                                         gpointer      user_data)
-{
-  if (ST_IS_WIDGET (actor))
-    st_widget_style_changed (ST_WIDGET (actor));
-  else if (CLUTTER_IS_CONTAINER (actor))
-    notify_children_of_style_change ((ClutterContainer *)actor);
 }
 
 static void
-notify_children_of_style_change (ClutterContainer *container)
+notify_children_of_style_change (ClutterActor *self)
 {
-  /* notify our children that their parent stylable has changed */
-  clutter_container_foreach (container,
-                             notify_children_of_style_change_foreach,
-                             NULL);
+  ClutterActorIter iter;
+  ClutterActor *actor;
+
+  clutter_actor_iter_init (&iter, self);
+  while (clutter_actor_iter_next (&iter, &actor))
+    {
+      if (ST_IS_WIDGET (actor))
+        st_widget_style_changed (ST_WIDGET (actor));
+      else
+        notify_children_of_style_change (actor);
+    }
 }
 
 static void
@@ -504,9 +482,7 @@ st_widget_real_style_changed (StWidget *self)
     return;
 
   clutter_actor_queue_redraw ((ClutterActor *) self);
-
-  if (CLUTTER_IS_CONTAINER (self))
-    notify_children_of_style_change ((ClutterContainer *)self);
+  notify_children_of_style_change ((ClutterActor *) self);
 }
 
 void
@@ -531,9 +507,9 @@ st_widget_style_changed (StWidget *widget)
 
 static void
 on_theme_context_changed (StThemeContext *context,
-                          ClutterStage      *stage)
+                          ClutterStage   *stage)
 {
-  notify_children_of_style_change (CLUTTER_CONTAINER (stage));
+  notify_children_of_style_change (CLUTTER_ACTOR (stage));
 }
 
 static StThemeNode *
@@ -604,7 +580,7 @@ st_widget_get_theme_node (StWidget *widget)
        * direction, to allow to adapt the CSS when necessary without
        * requiring separate style sheets.
        */
-      if (st_widget_get_direction (widget) == ST_TEXT_DIRECTION_RTL)
+      if (clutter_actor_get_text_direction (CLUTTER_ACTOR (widget)) == CLUTTER_TEXT_DIRECTION_RTL)
         direction_pseudo_class = "rtl";
       else
         direction_pseudo_class = "ltr";
@@ -697,19 +673,6 @@ st_widget_leave (ClutterActor         *actor,
     return FALSE;
 }
 
-static gboolean
-st_widget_motion (ClutterActor       *actor,
-                  ClutterMotionEvent *motion)
-{
-  StWidget *widget = ST_WIDGET (actor);
-  StWidgetPrivate *priv = widget->priv;
-
-  if (priv->has_tooltip)
-    st_widget_start_tooltip_timeout (widget);
-
-  return FALSE;
-}
-
 static void
 st_widget_key_focus_in (ClutterActor *actor)
 {
@@ -741,20 +704,9 @@ st_widget_key_press_event (ClutterActor    *actor,
   return FALSE;
 }
 
-static void
-st_widget_hide (ClutterActor *actor)
-{
-  StWidget *widget = (StWidget *) actor;
-
-  /* hide the tooltip, if there is one */
-  if (widget->priv->tooltip)
-    clutter_actor_hide (CLUTTER_ACTOR (widget->priv->tooltip));
-
-  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->hide (actor);
-}
-
 static gboolean
-st_widget_get_paint_volume (ClutterActor *self, ClutterPaintVolume *volume)
+st_widget_get_paint_volume (ClutterActor *self,
+                            ClutterPaintVolume *volume)
 {
   ClutterActorBox paint_box, alloc_box;
   StThemeNode *theme_node;
@@ -765,9 +717,9 @@ st_widget_get_paint_volume (ClutterActor *self, ClutterPaintVolume *volume)
   if (!clutter_actor_has_allocation (self))
     return FALSE;
 
-  priv = ST_WIDGET(self)->priv;
+  priv = ST_WIDGET (self)->priv;
 
-  theme_node = st_widget_get_theme_node (ST_WIDGET(self));
+  theme_node = st_widget_get_theme_node (ST_WIDGET (self));
   clutter_actor_get_allocation_box (self, &alloc_box);
 
   if (priv->transition_animation)
@@ -784,7 +736,45 @@ st_widget_get_paint_volume (ClutterActor *self, ClutterPaintVolume *volume)
   clutter_paint_volume_set_width (volume, paint_box.x2 - paint_box.x1);
   clutter_paint_volume_set_height (volume, paint_box.y2 - paint_box.y1);
 
+  if (!clutter_actor_get_clip_to_allocation (self))
+    {
+      ClutterActor *child;
+      /* Based on ClutterGroup/ClutterBox; include the children's
+       * paint volumes, since they may paint outside our allocation.
+       */
+      for (child = clutter_actor_get_first_child (self);
+           child != NULL;
+           child = clutter_actor_get_next_sibling (child))
+        {
+          const ClutterPaintVolume *child_volume;
+
+          child_volume = clutter_actor_get_transformed_paint_volume (child, self);
+          if (!child_volume)
+            return FALSE;
+
+          clutter_paint_volume_union (volume, child_volume);
+        }
+    }
+
   return TRUE;
+}
+
+static GList *
+st_widget_real_get_focus_chain (StWidget *widget)
+{
+  GList *children;
+  GList *focus_chain = NULL;
+
+  for (children = clutter_actor_get_children (CLUTTER_ACTOR (widget));
+       children;
+       children = children->next)
+    {
+      ClutterActor *child = children->data;
+
+      if (CLUTTER_ACTOR_IS_VISIBLE (child))
+        focus_chain = g_list_prepend (focus_chain, child);
+    }
+  return g_list_reverse (focus_chain);
 }
 
 
@@ -813,17 +803,16 @@ st_widget_class_init (StWidgetClass *klass)
 
   actor_class->enter_event = st_widget_enter;
   actor_class->leave_event = st_widget_leave;
-  actor_class->motion_event = st_widget_motion;
   actor_class->key_focus_in = st_widget_key_focus_in;
   actor_class->key_focus_out = st_widget_key_focus_out;
   actor_class->key_press_event = st_widget_key_press_event;
-  actor_class->hide = st_widget_hide;
 
   actor_class->get_accessible = st_widget_get_accessible;
 
   klass->style_changed = st_widget_real_style_changed;
   klass->navigate_focus = st_widget_real_navigate_focus;
   klass->get_accessible_type = st_widget_accessible_get_type;
+  klass->get_focus_chain = st_widget_real_get_focus_chain;
 
   /**
    * StWidget:pseudo-class:
@@ -866,7 +855,7 @@ st_widget_class_init (StWidgetClass *klass)
                                                         ST_PARAM_READWRITE));
 
   /**
-   * StWidget:theme
+   * StWidget:theme:
    *
    * A theme set on this actor overriding the global theming for this actor
    * and its descendants
@@ -892,35 +881,6 @@ st_widget_class_init (StWidgetClass *klass)
   g_object_class_install_property (gobject_class,
                                    PROP_STYLABLE,
                                    pspec);
-
-  /**
-   * StWidget:has-tooltip:
-   *
-   * Determines whether the widget has a tooltip. If set to %TRUE, causes the
-   * widget to monitor hover state (i.e. sets #ClutterActor:reactive and
-   * #StWidget:track-hover).
-   */
-  pspec = g_param_spec_boolean ("has-tooltip",
-                                "Has Tooltip",
-                                "Determines whether the widget has a tooltip",
-                                FALSE,
-                                ST_PARAM_READWRITE);
-  g_object_class_install_property (gobject_class,
-                                   PROP_HAS_TOOLTIP,
-                                   pspec);
-
-
-  /**
-   * StWidget:tooltip-text:
-   *
-   * text displayed on the tooltip
-   */
-  pspec = g_param_spec_string ("tooltip-text",
-                               "Tooltip Text",
-                               "Text displayed on the tooltip",
-                               "",
-                               ST_PARAM_READWRITE);
-  g_object_class_install_property (gobject_class, PROP_TOOLTIP_TEXT, pspec);
 
   /**
    * StWidget:track-hover:
@@ -982,6 +942,33 @@ st_widget_class_init (StWidgetClass *klass)
                                                         "Label that identifies this widget",
                                                         CLUTTER_TYPE_ACTOR,
                                                         ST_PARAM_READWRITE));
+  /**
+   * StWidget:accessible-role:
+   *
+   * The accessible role of this object
+   */
+  g_object_class_install_property (gobject_class,
+                                   PROP_ACCESSIBLE_ROLE,
+                                   g_param_spec_enum ("accessible-role",
+                                                      "Accessible Role",
+                                                      "The accessible role of this object",
+                                                      ATK_TYPE_ROLE,
+                                                      ATK_ROLE_INVALID,
+                                                      G_PARAM_READWRITE));
+
+
+  /**
+   * StWidget:accessible-name:
+   *
+   * Object instance's name for assistive technology access.
+   */
+  g_object_class_install_property (gobject_class,
+                                   PROP_ACCESSIBLE_NAME,
+                                   g_param_spec_string ("accessible-name",
+                                                        "Accessible name",
+                                                        "Object instance's name for assistive technology access.",
+                                                        NULL,
+                                                        ST_PARAM_READWRITE));
 
   /**
    * StWidget::style-changed:
@@ -995,8 +982,7 @@ st_widget_class_init (StWidgetClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   G_STRUCT_OFFSET (StWidgetClass, style_changed),
-                  NULL, NULL,
-                  _st_marshal_VOID__VOID,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 0);
 
   /**
@@ -1011,8 +997,7 @@ st_widget_class_init (StWidgetClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   G_STRUCT_OFFSET (StWidgetClass, popup_menu),
-                  NULL, NULL,
-                  _st_marshal_VOID__VOID,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 0);
 }
 
@@ -1028,7 +1013,7 @@ void
 st_widget_set_theme (StWidget  *actor,
                       StTheme  *theme)
 {
-  StWidgetPrivate *priv = actor->priv;
+  StWidgetPrivate *priv;
 
   g_return_if_fail (ST_IS_WIDGET (actor));
 
@@ -1377,7 +1362,7 @@ void
 st_widget_set_style (StWidget  *actor,
                      const gchar *style)
 {
-  StWidgetPrivate *priv = actor->priv;
+  StWidgetPrivate *priv;
 
   g_return_if_fail (ST_IS_WIDGET (actor));
 
@@ -1420,6 +1405,56 @@ st_widget_name_notify (StWidget   *widget,
 }
 
 static void
+st_widget_first_child_notify (StWidget   *widget,
+                              GParamSpec *pspec,
+                              gpointer    data)
+{
+  ClutterActor *first_child;
+
+  if (widget->priv->prev_first_child != NULL)
+    {
+      st_widget_remove_style_pseudo_class (widget->priv->prev_first_child, "first-child");
+      g_clear_object (&widget->priv->prev_first_child);
+    }
+
+  first_child = clutter_actor_get_first_child (CLUTTER_ACTOR (widget));
+
+  if (first_child == NULL)
+    return;
+
+  if (ST_IS_WIDGET (first_child))
+    {
+      st_widget_add_style_pseudo_class (ST_WIDGET (first_child), "first-child");
+      widget->priv->prev_first_child = g_object_ref (ST_WIDGET (first_child));
+    }
+}
+
+static void
+st_widget_last_child_notify (StWidget   *widget,
+                             GParamSpec *pspec,
+                             gpointer    data)
+{
+  ClutterActor *last_child;
+
+  if (widget->priv->prev_last_child != NULL)
+    {
+      st_widget_remove_style_pseudo_class (widget->priv->prev_last_child, "last-child");
+      g_clear_object (&widget->priv->prev_last_child);
+    }
+
+  last_child = clutter_actor_get_last_child (CLUTTER_ACTOR (widget));
+
+  if (last_child == NULL)
+    return;
+
+  if (ST_IS_WIDGET (last_child))
+    {
+      st_widget_add_style_pseudo_class (ST_WIDGET (last_child), "last-child");
+      widget->priv->prev_last_child = g_object_ref (ST_WIDGET (last_child));
+    }
+}
+
+static void
 st_widget_init (StWidget *actor)
 {
   StWidgetPrivate *priv;
@@ -1427,9 +1462,13 @@ st_widget_init (StWidget *actor)
   actor->priv = priv = ST_WIDGET_GET_PRIVATE (actor);
   priv->is_stylable = TRUE;
   priv->transition_animation = NULL;
+  priv->local_state_set = atk_state_set_new ();
 
   /* connect style changed */
   g_signal_connect (actor, "notify::name", G_CALLBACK (st_widget_name_notify), NULL);
+
+  g_signal_connect (actor, "notify::first-child", G_CALLBACK (st_widget_first_child_notify), NULL);
+  g_signal_connect (actor, "notify::last-child", G_CALLBACK (st_widget_last_child_notify), NULL);
 }
 
 static void
@@ -1511,252 +1550,6 @@ st_widget_ensure_style (StWidget *widget)
     st_widget_recompute_style (widget, NULL);
 }
 
-static StTextDirection default_direction = ST_TEXT_DIRECTION_LTR;
-
-StTextDirection
-st_widget_get_default_direction (void)
-{
-  return default_direction;
-}
-
-void
-st_widget_set_default_direction (StTextDirection dir)
-{
-  g_return_if_fail (dir != ST_TEXT_DIRECTION_NONE);
-
-  default_direction = dir;
-}
-
-StTextDirection
-st_widget_get_direction (StWidget *self)
-{
-  g_return_val_if_fail (ST_IS_WIDGET (self), ST_TEXT_DIRECTION_LTR);
-
-  if (self->priv->direction != ST_TEXT_DIRECTION_NONE)
-    return self->priv->direction;
-  else
-    return default_direction;
-}
-
-void
-st_widget_set_direction (StWidget *self, StTextDirection dir)
-{
-  StTextDirection old_direction;
-
-  g_return_if_fail (ST_IS_WIDGET (self));
-
-  old_direction = st_widget_get_direction (self);
-  self->priv->direction = dir;
-
-  if (old_direction != st_widget_get_direction (self))
-    st_widget_style_changed (self);
-}
-
-static void
-st_widget_ensure_tooltip_parented (StWidget *widget, ClutterStage *stage)
-{
-  StWidgetPrivate *priv;
-  ClutterContainer *ui_root;
-  ClutterActor *tooltip, *parent;
-
-  priv = widget->priv;
-
-  ui_root = st_get_ui_root (stage);
-
-  tooltip = CLUTTER_ACTOR (priv->tooltip);
-  parent = clutter_actor_get_parent (tooltip);
-
-  if (G_UNLIKELY (parent != CLUTTER_ACTOR (ui_root)))
-    {
-      if (parent)
-        clutter_container_remove_actor (CLUTTER_CONTAINER (parent), tooltip);
-
-      clutter_container_add_actor (ui_root, tooltip);
-    }
-}
-
-/**
- * st_widget_set_has_tooltip:
- * @widget: A #StWidget
- * @has_tooltip: %TRUE if the widget should display a tooltip
- *
- * Enables tooltip support on the #StWidget.
- *
- * Note that setting has-tooltip to %TRUE will cause
- * #ClutterActor:reactive and #StWidget:track-hover to be set %TRUE as
- * well, but you must clear these flags yourself (if appropriate) when
- * setting it %FALSE.
- */
-void
-st_widget_set_has_tooltip (StWidget *widget,
-                           gboolean  has_tooltip)
-{
-  StWidgetPrivate *priv;
-  ClutterActor *stage;
-
-  g_return_if_fail (ST_IS_WIDGET (widget));
-
-  priv = widget->priv;
-
-  priv->has_tooltip = has_tooltip;
-
-  if (has_tooltip)
-    {
-      clutter_actor_set_reactive ((ClutterActor*) widget, TRUE);
-      st_widget_set_track_hover (widget, TRUE);
-
-      if (!priv->tooltip)
-        {
-          priv->tooltip = g_object_new (ST_TYPE_TOOLTIP, NULL);
-          g_object_ref_sink (priv->tooltip);
-
-          stage = clutter_actor_get_stage (CLUTTER_ACTOR (widget));
-          if (stage != NULL)
-            st_widget_ensure_tooltip_parented (widget, CLUTTER_STAGE (stage));
-        }
-    }
-  else
-    {
-      if (priv->tooltip_timeout_id)
-        {
-          g_source_remove (priv->tooltip_timeout_id);
-          priv->tooltip_timeout_id = 0;
-        }
-
-      if (priv->tooltip)
-        {
-          clutter_actor_destroy (CLUTTER_ACTOR (priv->tooltip));
-          g_object_unref (priv->tooltip);
-          priv->tooltip = NULL;
-        }
-    }
-}
-
-/**
- * st_widget_get_has_tooltip:
- * @widget: A #StWidget
- *
- * Returns the current value of the has-tooltip property. See
- * st_tooltip_set_has_tooltip() for more information.
- *
- * Returns: current value of has-tooltip on @widget
- */
-gboolean
-st_widget_get_has_tooltip (StWidget *widget)
-{
-  g_return_val_if_fail (ST_IS_WIDGET (widget), FALSE);
-
-  return widget->priv->has_tooltip;
-}
-
-/**
- * st_widget_set_tooltip_text:
- * @widget: A #StWidget
- * @text: text to set as the tooltip
- *
- * Set the tooltip text of the widget. This will set StWidget::has-tooltip to
- * %TRUE. A value of %NULL will unset the tooltip and set has-tooltip to %FALSE.
- *
- */
-void
-st_widget_set_tooltip_text (StWidget    *widget,
-                            const gchar *text)
-{
-  StWidgetPrivate *priv;
-
-  g_return_if_fail (ST_IS_WIDGET (widget));
-
-  priv = widget->priv;
-
-  if (text == NULL)
-    st_widget_set_has_tooltip (widget, FALSE);
-  else
-    {
-      st_widget_set_has_tooltip (widget, TRUE);
-      st_tooltip_set_label (priv->tooltip, text);
-    }
-}
-
-/**
- * st_widget_get_tooltip_text:
- * @widget: A #StWidget
- *
- * Get the current tooltip string
- *
- * Returns: The current tooltip string, owned by the #StWidget
- */
-const gchar*
-st_widget_get_tooltip_text (StWidget *widget)
-{
-  StWidgetPrivate *priv;
-
-  g_return_val_if_fail (ST_IS_WIDGET (widget), NULL);
-  priv = widget->priv;
-
-  if (!priv->has_tooltip)
-    return NULL;
-
-  return st_tooltip_get_label (widget->priv->tooltip);
-}
-
-/**
- * st_widget_show_tooltip:
- * @widget: A #StWidget
- *
- * Force the tooltip for @widget to be shown
- *
- */
-void
-st_widget_show_tooltip (StWidget *widget)
-{
-  g_return_if_fail (ST_IS_WIDGET (widget));
-
-  widget->priv->show_tooltip = TRUE;
-  if (CLUTTER_ACTOR_IS_MAPPED (widget))
-    st_widget_do_show_tooltip (widget);
-}
-
-static void
-st_widget_do_show_tooltip (StWidget *widget)
-{
-  ClutterActor *stage, *tooltip;
-
-  stage = clutter_actor_get_stage (CLUTTER_ACTOR (widget));
-  g_return_if_fail (stage != NULL);
-
-  if (widget->priv->tooltip)
-    {
-      tooltip = CLUTTER_ACTOR (widget->priv->tooltip);
-      st_widget_ensure_tooltip_parented (widget, CLUTTER_STAGE (stage));
-      clutter_actor_raise (tooltip, NULL);
-      clutter_actor_show_all (tooltip);
-    }
-}
-
-/**
- * st_widget_hide_tooltip:
- * @widget: A #StWidget
- *
- * Hide the tooltip for @widget
- *
- */
-void
-st_widget_hide_tooltip (StWidget *widget)
-{
-  g_return_if_fail (ST_IS_WIDGET (widget));
-
-  widget->priv->show_tooltip = FALSE;
-  if (CLUTTER_ACTOR_IS_MAPPED (widget))
-    st_widget_do_hide_tooltip (widget);
-}
-
-static void
-st_widget_do_hide_tooltip (StWidget *widget)
-{
-  if (widget->priv->tooltip)
-    clutter_actor_hide (CLUTTER_ACTOR (widget->priv->tooltip));
-}
-
 /**
  * st_widget_set_track_hover:
  * @widget: A #StWidget
@@ -1800,7 +1593,7 @@ st_widget_set_track_hover (StWidget *widget,
  * @widget: A #StWidget
  *
  * Returns the current value of the track-hover property. See
- * st_tooltip_set_track_hover() for more information.
+ * st_widget_set_track_hover() for more information.
  *
  * Returns: current value of track-hover on @widget
  */
@@ -1812,36 +1605,13 @@ st_widget_get_track_hover (StWidget *widget)
   return widget->priv->track_hover;
 }
 
-static gboolean
-tooltip_timeout (gpointer data)
-{
-  st_widget_show_tooltip (data);
-
-  return FALSE;
-}
-
-static void
-st_widget_start_tooltip_timeout (StWidget *widget)
-{
-  StWidgetPrivate *priv = widget->priv;
-  GtkSettings *settings = gtk_settings_get_default ();
-  guint timeout;
-
-  if (priv->tooltip_timeout_id)
-    g_source_remove (priv->tooltip_timeout_id);
-
-  g_object_get (settings, "gtk-tooltip-timeout", &timeout, NULL);
-  priv->tooltip_timeout_id = g_timeout_add (timeout, tooltip_timeout, widget);
-}
-
 /**
  * st_widget_set_hover:
  * @widget: A #StWidget
  * @hover: whether the pointer is hovering over the widget
  *
  * Sets @widget's hover property and adds or removes "hover" from its
- * pseudo class accordingly. If #StWidget:has-tooltip is %TRUE, this
- * will also show or hide the tooltip, as appropriate.
+ * pseudo class accordingly.
  *
  * If you have set #StWidget:track-hover, you should not need to call
  * this directly. You can call st_widget_sync_hover() if the hover
@@ -1861,25 +1631,9 @@ st_widget_set_hover (StWidget *widget,
     {
       priv->hover = hover;
       if (priv->hover)
-        {
-          st_widget_add_style_pseudo_class (widget, "hover");
-          if (priv->has_tooltip)
-            st_widget_start_tooltip_timeout (widget);
-        }
+        st_widget_add_style_pseudo_class (widget, "hover");
       else
-        {
-          st_widget_remove_style_pseudo_class (widget, "hover");
-          if (priv->has_tooltip)
-            {
-              if (priv->tooltip_timeout_id)
-                {
-                  g_source_remove (priv->tooltip_timeout_id);
-                  priv->tooltip_timeout_id = 0;
-                }
-
-              st_widget_hide_tooltip (widget);
-            }
-        }
+        st_widget_remove_style_pseudo_class (widget, "hover");
       g_object_notify (G_OBJECT (widget), "hover");
     }
 }
@@ -1969,19 +1723,276 @@ st_widget_get_can_focus (StWidget *widget)
   return widget->priv->can_focus;
 }
 
+/* filter @children to contain only only actors that overlap @rbox
+ * when moving in @direction. (Assuming no transformations.)
+ */
+static GList *
+filter_by_position (GList            *children,
+                    ClutterActorBox  *rbox,
+                    GtkDirectionType  direction)
+{
+  ClutterActorBox cbox;
+  ClutterVertex abs_vertices[4];
+  GList *l, *ret;
+  ClutterActor *child;
+
+  for (l = children, ret = NULL; l; l = l->next)
+    {
+      child = l->data;
+      clutter_actor_get_abs_allocation_vertices (child, abs_vertices);
+      clutter_actor_box_from_vertices (&cbox, abs_vertices);
+
+      /* Filter out children if they are in the wrong direction from
+       * @rbox, or if they don't overlap it. To account for floating-
+       * point imprecision, an actor is "down" (etc.) from an another
+       * actor even if it overlaps it by up to 0.1 pixels.
+       */
+      switch (direction)
+        {
+        case GTK_DIR_UP:
+          if (cbox.y2 > rbox->y1 + 0.1)
+            continue;
+          break;
+
+        case GTK_DIR_DOWN:
+          if (cbox.y1 < rbox->y2 - 0.1)
+            continue;
+          break;
+
+        case GTK_DIR_LEFT:
+          if (cbox.x2 > rbox->x1 + 0.1)
+            continue;
+          break;
+
+        case GTK_DIR_RIGHT:
+          if (cbox.x1 < rbox->x2 - 0.1)
+            continue;
+          break;
+
+        default:
+          g_return_val_if_reached (NULL);
+        }
+
+      ret = g_list_prepend (ret, child);
+    }
+
+  g_list_free (children);
+  return ret;
+}
+
+
+typedef struct {
+  GtkDirectionType direction;
+  ClutterActorBox box;
+} StWidgetChildSortData;
+
+static int
+sort_by_position (gconstpointer  a,
+                  gconstpointer  b,
+                  gpointer       user_data)
+{
+  ClutterActor *actor_a = (ClutterActor *)a;
+  ClutterActor *actor_b = (ClutterActor *)b;
+  StWidgetChildSortData *sort_data = user_data;
+  GtkDirectionType direction = sort_data->direction;
+  ClutterActorBox abox, bbox;
+  ClutterVertex abs_vertices[4];
+  int ax, ay, bx, by;
+  int cmp, fmid;
+
+  /* Determine the relationship, relative to motion in @direction, of
+   * the center points of the two actors. Eg, for %GTK_DIR_UP, we
+   * return a negative number if @actor_a's center is below @actor_b's
+   * center, and postive if vice versa, which will result in an
+   * overall list sorted bottom-to-top.
+   */
+
+  clutter_actor_get_abs_allocation_vertices (actor_a, abs_vertices);
+  clutter_actor_box_from_vertices (&abox, abs_vertices);
+  ax = (int)(abox.x1 + abox.x2) / 2;
+  ay = (int)(abox.y1 + abox.y2) / 2;
+  clutter_actor_get_abs_allocation_vertices (actor_b, abs_vertices);
+  clutter_actor_box_from_vertices (&bbox, abs_vertices);
+  bx = (int)(bbox.x1 + bbox.x2) / 2;
+  by = (int)(bbox.y1 + bbox.y2) / 2;
+
+  switch (direction)
+    {
+    case GTK_DIR_UP:
+      cmp = by - ay;
+      break;
+    case GTK_DIR_DOWN:
+      cmp = ay - by;
+      break;
+    case GTK_DIR_LEFT:
+      cmp = bx - ax;
+      break;
+    case GTK_DIR_RIGHT:
+      cmp = ax - bx;
+      break;
+    default:
+      g_return_val_if_reached (0);
+    }
+
+  if (cmp)
+    return cmp;
+
+  /* If two actors have the same center on the axis being sorted,
+   * prefer the one that is closer to the center of the current focus
+   * actor on the other axis. Eg, for %GTK_DIR_UP, prefer whichever
+   * of @actor_a and @actor_b has a horizontal center closest to the
+   * current focus actor's horizontal center.
+   *
+   * (This matches GTK's behavior.)
+   */
+  switch (direction)
+    {
+    case GTK_DIR_UP:
+    case GTK_DIR_DOWN:
+      fmid = (int)(sort_data->box.x1 + sort_data->box.x2) / 2;
+      return abs (ax - fmid) - abs (bx - fmid);
+    case GTK_DIR_LEFT:
+    case GTK_DIR_RIGHT:
+      fmid = (int)(sort_data->box.y1 + sort_data->box.y2) / 2;
+      return abs (ay - fmid) - abs (by - fmid);
+    default:
+      g_return_val_if_reached (0);
+    }
+}
+
 static gboolean
 st_widget_real_navigate_focus (StWidget         *widget,
                                ClutterActor     *from,
                                GtkDirectionType  direction)
 {
-  if (widget->priv->can_focus &&
-      CLUTTER_ACTOR (widget) != from)
+  ClutterActor *widget_actor, *focus_child;
+  GList *children, *l;
+
+  widget_actor = CLUTTER_ACTOR (widget);
+  if (from == widget_actor)
+    return FALSE;
+
+  /* Figure out if @from is a descendant of @widget, and if so,
+   * set @focus_child to the immediate child of @widget that
+   * contains (or *is*) @from.
+   */
+  focus_child = from;
+  while (focus_child && clutter_actor_get_parent (focus_child) != widget_actor)
+    focus_child = clutter_actor_get_parent (focus_child);
+
+  if (widget->priv->can_focus)
     {
-      clutter_actor_grab_key_focus (CLUTTER_ACTOR (widget));
-      return TRUE;
+      if (!focus_child)
+        {
+          /* Accept focus from outside */
+          clutter_actor_grab_key_focus (widget_actor);
+          return TRUE;
+        }
+      else
+        {
+          /* Yield focus from within: since @widget itself is
+           * focusable we don't allow the focus to be navigated
+           * within @widget.
+           */
+          return FALSE;
+        }
     }
+
+  /* See if we can navigate within @focus_child */
+  if (focus_child && ST_IS_WIDGET (focus_child))
+    {
+      if (st_widget_navigate_focus (ST_WIDGET (focus_child), from, direction, FALSE))
+        return TRUE;
+    }
+
+  children = st_widget_get_focus_chain (widget);
+  if (direction == GTK_DIR_TAB_FORWARD ||
+      direction == GTK_DIR_TAB_BACKWARD)
+    {
+      /* At this point we know that we want to navigate focus to one of
+       * @widget's immediate children; the next one after @focus_child, or the
+       * first one if @focus_child is %NULL. (With "next" and "first" being
+       * determined by @direction.)
+       */
+      if (direction == GTK_DIR_TAB_BACKWARD)
+        children = g_list_reverse (children);
+
+      if (focus_child)
+        {
+          /* Remove focus_child and any earlier children */
+          while (children && children->data != focus_child)
+            children = g_list_delete_link (children, children);
+          if (children)
+            children = g_list_delete_link (children, children);
+        }
+    }
+  else /* direction is an arrow key, not tab */
+    {
+      StWidgetChildSortData sort_data;
+      ClutterVertex abs_vertices[4];
+
+      /* Compute the allocation box of the previous focused actor. If there
+       * was no previous focus, use the coordinates of the appropriate edge of
+       * @widget.
+       *
+       * Note that all of this code assumes the actors are not
+       * transformed (or at most, they are all scaled by the same
+       * amount). If @widget or any of its children is rotated, or
+       * any child is inconsistently scaled, then the focus chain will
+       * probably be unpredictable.
+       */
+      if (from)
+        {
+          clutter_actor_get_abs_allocation_vertices (from, abs_vertices);
+          clutter_actor_box_from_vertices (&sort_data.box, abs_vertices);
+        }
+      else
+        {
+          clutter_actor_get_abs_allocation_vertices (widget_actor, abs_vertices);
+          clutter_actor_box_from_vertices (&sort_data.box, abs_vertices);
+          switch (direction)
+            {
+            case GTK_DIR_UP:
+              sort_data.box.y1 = sort_data.box.y2;
+              break;
+            case GTK_DIR_DOWN:
+              sort_data.box.y2 = sort_data.box.y1;
+              break;
+            case GTK_DIR_LEFT:
+              sort_data.box.x1 = sort_data.box.x2;
+              break;
+            case GTK_DIR_RIGHT:
+              sort_data.box.x2 = sort_data.box.x1;
+              break;
+            default:
+              g_warn_if_reached ();
+            }
+        }
+      sort_data.direction = direction;
+
+      if (from)
+        children = filter_by_position (children, &sort_data.box, direction);
+      if (children)
+        children = g_list_sort_with_data (children, sort_by_position, &sort_data);
+    }
+
+  /* Now try each child in turn */
+  for (l = children; l; l = l->next)
+    {
+      if (ST_IS_WIDGET (l->data))
+        {
+          if (st_widget_navigate_focus (l->data, from, direction, FALSE))
+            {
+              g_list_free (children);
+              return TRUE;
+            }
+        }
+    }
+
+  g_list_free (children);
   return FALSE;
 }
+
 
 /**
  * st_widget_navigate_focus:
@@ -1996,9 +2007,11 @@ st_widget_real_navigate_focus (StWidget         *widget,
  * If @from is a descendant of @widget, this attempts to move the
  * keyboard focus to the next descendant of @widget (in the order
  * implied by @direction) that has the #StWidget:can-focus property
- * set. If @from is %NULL, or outside of @widget, this attempts to
- * focus either @widget itself, or its first descendant in the order
- * implied by @direction.
+ * set. If @from is %NULL, this attempts to focus either @widget
+ * itself, or its first descendant in the order implied by
+ * @direction. If @from is outside of @widget, it behaves as if it was
+ * a descendant if @direction is one of the directional arrows and as
+ * if it was %NULL otherwise.
  *
  * If a container type is marked #StWidget:can-focus, the expected
  * behavior is that it will only take up a single slot on the focus
@@ -2110,18 +2123,17 @@ st_describe_actor (ClutterActor *actor)
   if (name)
     g_string_append_printf (desc, " \"%s\"", name);
 
-  if (!append_actor_text (desc, actor) && CLUTTER_IS_CONTAINER (actor))
+  if (!append_actor_text (desc, actor))
     {
       GList *children, *l;
 
       /* Do a limited search of @actor's children looking for a label */
-      children = clutter_container_get_children (CLUTTER_CONTAINER (actor));
+      children = clutter_actor_get_children (actor);
       for (l = children, i = 0; l && i < 20; l = l->next, i++)
         {
           if (append_actor_text (desc, l->data))
             break;
-          else if (CLUTTER_IS_CONTAINER (l->data))
-            children = g_list_concat (children, clutter_container_get_children (l->data));
+          children = g_list_concat (children, clutter_actor_get_children (l->data));
         }
       g_list_free (children);
     }
@@ -2133,7 +2145,6 @@ st_describe_actor (ClutterActor *actor)
 
 /**
  * st_set_slow_down_factor:
- *
  * @factor: new slow-down factor
  *
  * Set a global factor applied to all animation durations
@@ -2202,6 +2213,168 @@ st_widget_set_label_actor (StWidget     *widget,
     }
 }
 
+/**
+ * st_widget_set_accessible_name:
+ * @widget: widget to set the accessible name for
+ * @name: (allow-none): a character string to be set as the accessible name
+ *
+ * This method sets @name as the accessible name for @widget.
+ *
+ * Usually you will have no need to set the accessible name for an
+ * object, as usually there is a label for most of the interface
+ * elements. So in general it is better to just use
+ * @st_widget_set_label_actor. This method is only required when you
+ * need to set an accessible name and there is no available label
+ * object.
+ *
+ */
+void
+st_widget_set_accessible_name (StWidget    *widget,
+                               const gchar *name)
+{
+  g_return_if_fail (ST_IS_WIDGET (widget));
+
+  if (widget->priv->accessible_name != NULL)
+    g_free (widget->priv->accessible_name);
+
+  widget->priv->accessible_name = g_strdup (name);
+  g_object_notify (G_OBJECT (widget), "accessible-name");
+}
+
+/**
+ * st_widget_get_accessible_name:
+ * @widget: widget to get the accessible name for
+ *
+ * Gets the accessible name for this widget. See
+ * st_widget_set_accessible_name() for more information.
+ *
+ * Return value: a character string representing the accessible name
+ * of the widget.
+ */
+const gchar *
+st_widget_get_accessible_name (StWidget    *widget)
+{
+  g_return_val_if_fail (ST_IS_WIDGET (widget), NULL);
+
+  return widget->priv->accessible_name;
+}
+
+/**
+ * st_widget_set_accessible_role:
+ * @widget: widget to set the accessible role for
+ * @role: The role to use
+ *
+ * This method sets @role as the accessible role for @widget. This
+ * role describes what kind of user interface element @widget is and
+ * is provided so that assistive technologies know how to present
+ * @widget to the user.
+ *
+ * Usually you will have no need to set the accessible role for an
+ * object, as this information is extracted from the context of the
+ * object (ie: a #StButton has by default a push button role). This
+ * method is only required when you need to redefine the role
+ * currently associated with the widget, for instance if it is being
+ * used in an unusual way (ie: a #StButton used as a togglebutton), or
+ * if a generic object is used directly (ie: a container as a menu
+ * item).
+ *
+ * If @role is #ATK_ROLE_INVALID, the role will not be changed
+ * and the accessible's default role will be used instead.
+ */
+void
+st_widget_set_accessible_role (StWidget *widget,
+                               AtkRole   role)
+{
+  g_return_if_fail (ST_IS_WIDGET (widget));
+
+  widget->priv->accessible_role = role;
+
+  g_object_notify (G_OBJECT (widget), "accessible-role");
+}
+
+
+/**
+ * st_widget_get_accessible_role:
+ * @widget: widget to get the accessible role for
+ *
+ * Gets the #AtkRole for this widget. See
+ * st_widget_set_accessible_role() for more information.
+ *
+ * Return value: accessible #AtkRole for this widget
+ */
+AtkRole
+st_widget_get_accessible_role (StWidget *widget)
+{
+  AtkObject *accessible = NULL;
+  AtkRole role = ATK_ROLE_INVALID;
+
+  g_return_val_if_fail (ST_IS_WIDGET (widget), ATK_ROLE_INVALID);
+
+  if (widget->priv->accessible_role != ATK_ROLE_INVALID)
+    role = widget->priv->accessible_role;
+  else if (widget->priv->accessible != NULL)
+    role = atk_object_get_role (accessible);
+
+  return role;
+}
+
+static void
+notify_accessible_state_change (StWidget     *widget,
+                                AtkStateType  state,
+                                gboolean      value)
+{
+  if (widget->priv->accessible != NULL)
+    atk_object_notify_state_change (widget->priv->accessible, state, value);
+}
+
+/**
+ * st_widget_add_accessible_state:
+ * @widget: A #StWidget
+ * @state: #AtkStateType state to add
+ *
+ * This method adds @state as one of the accessible states for
+ * @widget. The list of states of a widget describes the current state
+ * of user interface element @widget and is provided so that assistive
+ * technologies know how to present @widget to the user.
+ *
+ * Usually you will have no need to add accessible states for an
+ * object, as the accessible object can extract most of the states
+ * from the object itself (ie: a #StButton knows when it is pressed).
+ * This method is only required when one cannot extract the
+ * information automatically from the object itself (i.e.: a generic
+ * container used as a toggle menu item will not automatically include
+ * the toggled state).
+ *
+ */
+void
+st_widget_add_accessible_state (StWidget    *widget,
+                                AtkStateType state)
+{
+  g_return_if_fail (ST_IS_WIDGET (widget));
+
+  if (atk_state_set_add_state (widget->priv->local_state_set, state))
+    notify_accessible_state_change (widget, state, TRUE);
+}
+
+/**
+ * st_widget_remove_accessible_state:
+ * @widget: A #StWidget
+ * @state: #AtkState state to remove
+ *
+ * This method removes @state as on of the accessible states for
+ * @widget. See st_widget_add_accessible_state() for more information.
+ *
+ */
+void
+st_widget_remove_accessible_state (StWidget    *widget,
+                                   AtkStateType state)
+{
+  g_return_if_fail (ST_IS_WIDGET (widget));
+
+  if (atk_state_set_remove_state (widget->priv->local_state_set, state))
+    notify_accessible_state_change (widget, state, FALSE);
+}
+
 /******************************************************************************/
 /*************************** ACCESSIBILITY SUPPORT ****************************/
 /******************************************************************************/
@@ -2216,6 +2389,7 @@ static void st_widget_accessible_dispose    (GObject *gobject);
 static AtkStateSet *st_widget_accessible_ref_state_set (AtkObject *obj);
 static void         st_widget_accessible_initialize    (AtkObject *obj,
                                                         gpointer   data);
+static AtkRole      st_widget_accessible_get_role      (AtkObject *obj);
 
 /* Private methods */
 static void on_pseudo_class_notify (GObject    *gobject,
@@ -2227,7 +2401,7 @@ static void on_can_focus_notify    (GObject    *gobject,
 static void on_label_notify        (GObject    *gobject,
                                     GParamSpec *pspec,
                                     gpointer    data);
-static void check_selected         (StWidgetAccessible *self,
+static void check_pseudo_class     (StWidgetAccessible *self,
                                     StWidget *widget);
 static void check_labels           (StWidgetAccessible *self,
                                     StWidget *widget);
@@ -2242,6 +2416,7 @@ struct _StWidgetAccessiblePrivate
 {
   /* Cached values (used to avoid extra notifications) */
   gboolean selected;
+  gboolean checked;
 
   /* The current_label. Right now there are the proper atk
    * relationships between this object and the label
@@ -2271,6 +2446,28 @@ st_widget_get_accessible (ClutterActor *actor)
   return widget->priv->accessible;
 }
 
+static const gchar *
+st_widget_accessible_get_name (AtkObject *obj)
+{
+  const gchar* name = NULL;
+
+  g_return_val_if_fail (ST_IS_WIDGET_ACCESSIBLE (obj), NULL);
+
+  name = ATK_OBJECT_CLASS (st_widget_accessible_parent_class)->get_name (obj);
+  if (name == NULL)
+    {
+      StWidget *widget = NULL;
+
+      widget = ST_WIDGET (atk_gobject_accessible_get_object (ATK_GOBJECT_ACCESSIBLE (obj)));
+
+      if (widget == NULL)
+        name = NULL;
+      else
+        name = widget->priv->accessible_name;
+    }
+
+  return name;
+}
 
 static void
 st_widget_accessible_class_init (StWidgetAccessibleClass *klass)
@@ -2282,6 +2479,8 @@ st_widget_accessible_class_init (StWidgetAccessibleClass *klass)
 
   atk_class->ref_state_set = st_widget_accessible_ref_state_set;
   atk_class->initialize = st_widget_accessible_initialize;
+  atk_class->get_role = st_widget_accessible_get_role;
+  atk_class->get_name = st_widget_accessible_get_name;
 
   g_type_class_add_private (gobject_class, sizeof (StWidgetAccessiblePrivate));
 }
@@ -2306,6 +2505,13 @@ st_widget_accessible_dispose (GObject *gobject)
     }
 }
 
+static void
+on_accessible_name_notify (GObject    *gobject,
+                           GParamSpec *pspec,
+                           AtkObject  *accessible)
+{
+  g_object_notify (G_OBJECT (accessible), "accessible-name");
+}
 
 static void
 st_widget_accessible_initialize (AtkObject *obj,
@@ -2325,11 +2531,15 @@ st_widget_accessible_initialize (AtkObject *obj,
                     G_CALLBACK (on_label_notify),
                     obj);
 
+  g_signal_connect (data, "notify::accessible-name",
+                    G_CALLBACK (on_accessible_name_notify),
+                    obj);
+
   /* Check the cached selected state and notify the first selection.
    * Ie: it is required to ensure a first notification when Alt+Tab
    * popup appears
    */
-  check_selected (ST_WIDGET_ACCESSIBLE (obj), ST_WIDGET (data));
+  check_pseudo_class (ST_WIDGET_ACCESSIBLE (obj), ST_WIDGET (data));
   check_labels (ST_WIDGET_ACCESSIBLE (obj), ST_WIDGET (data));
 }
 
@@ -2337,6 +2547,7 @@ static AtkStateSet *
 st_widget_accessible_ref_state_set (AtkObject *obj)
 {
   AtkStateSet *result = NULL;
+  AtkStateSet *aux_set = NULL;
   ClutterActor *actor = NULL;
   StWidget *widget = NULL;
   StWidgetAccessible *self = NULL;
@@ -2357,6 +2568,9 @@ st_widget_accessible_ref_state_set (AtkObject *obj)
   if (self->priv->selected)
     atk_state_set_add_state (result, ATK_STATE_SELECTED);
 
+  if (self->priv->checked)
+    atk_state_set_add_state (result, ATK_STATE_CHECKED);
+
   /* On clutter there isn't any tip to know if a actor is focusable or
    * not, anyone can receive the key_focus. For this reason
    * cally_actor sets any actor as FOCUSABLE. This is not the case on
@@ -2368,7 +2582,34 @@ st_widget_accessible_ref_state_set (AtkObject *obj)
   else
     atk_state_set_remove_state (result, ATK_STATE_FOCUSABLE);
 
+  /* We add the states added externally if required */
+  if (!atk_state_set_is_empty (widget->priv->local_state_set))
+    {
+      aux_set = atk_state_set_or_sets (result, widget->priv->local_state_set);
+
+      g_object_unref (result); /* previous result will not be used */
+      result = aux_set;
+    }
+
   return result;
+}
+
+static AtkRole
+st_widget_accessible_get_role (AtkObject *obj)
+{
+  StWidget *widget = NULL;
+
+  g_return_val_if_fail (ST_IS_WIDGET_ACCESSIBLE (obj), ATK_ROLE_INVALID);
+
+  widget = ST_WIDGET (atk_gobject_accessible_get_object (ATK_GOBJECT_ACCESSIBLE (obj)));
+
+  if (widget == NULL)
+    return ATK_ROLE_INVALID;
+
+  if (widget->priv->accessible_role != ATK_ROLE_INVALID)
+    return widget->priv->accessible_role;
+
+  return ATK_OBJECT_CLASS (st_widget_accessible_parent_class)->get_role (obj);
 }
 
 static void
@@ -2376,27 +2617,30 @@ on_pseudo_class_notify (GObject    *gobject,
                         GParamSpec *pspec,
                         gpointer    data)
 {
-  check_selected (ST_WIDGET_ACCESSIBLE (data),
-                  ST_WIDGET (gobject));
+  check_pseudo_class (ST_WIDGET_ACCESSIBLE (data),
+                      ST_WIDGET (gobject));
 }
 
 /*
- * This method checks if the widget is selected, and notify a atk
- * state change if required
+ * In some cases the only way to check some states are checking the
+ * pseudo-class. Like if the object is selected (see bug 637830) or if
+ * the object is toggled. This method also notifies a state change if
+ * the value is different to the one cached.
  *
- * In order to decide if there was a selection, we use the current
- * pseudo-class of the widget searching for "selected", the current
- * homogeneus way to check if a item is selected (see bug 637830)
+ * We also assume that if the object uses that pseudo-class, it makes
+ * sense to notify that state change. It would be possible to refine
+ * that behaviour checking the role (ie: notify CHECKED changes only
+ * for CHECK_BUTTON roles).
  *
- * In a ideal world we would have a more standard way to check if the
- * item is selected or not, like the widget-context (as in the case of
+ * In a ideal world we would have a more standard way to get the
+ * state, like the widget-context (as in the case of
  * gtktreeview-cells), or something like the property "can-focus". But
  * for the moment this is enough, and we can update that in the future
  * if required.
  */
 static void
-check_selected (StWidgetAccessible *self,
-                StWidget *widget)
+check_pseudo_class (StWidgetAccessible *self,
+                    StWidget *widget)
 {
   gboolean found = FALSE;
 
@@ -2410,6 +2654,16 @@ check_selected (StWidgetAccessible *self,
                                       ATK_STATE_SELECTED,
                                       found);
     }
+
+  found = st_widget_has_style_pseudo_class (widget,
+                                            "checked");
+  if (found != self->priv->checked)
+    {
+      self->priv->checked = found;
+      atk_object_notify_state_change (ATK_OBJECT (self),
+                                      ATK_STATE_CHECKED,
+                                      found);
+    }
 }
 
 static void
@@ -2421,74 +2675,6 @@ on_can_focus_notify (GObject    *gobject,
 
   atk_object_notify_state_change (ATK_OBJECT (data),
                                   ATK_STATE_FOCUSABLE, can_focus);
-}
-
-static GQuark
-st_ui_root_quark (void)
-{
-  static GQuark value = 0;
-  if (G_UNLIKELY (value == 0))
-    value = g_quark_from_static_string ("st-ui-root");
-  return value;
-}
-
-static void
-st_ui_root_destroyed (ClutterActor *actor,
-                      ClutterStage *stage)
-{
-  st_set_ui_root (stage, NULL);
-  g_signal_handlers_disconnect_by_func (actor, st_ui_root_destroyed, stage);
-}
-
-/**
- * st_get_ui_root:
- * @stage: a #ClutterStage
- * @container: (allow-none): the new UI root
- *
- * Sets a #ClutterContainer to be the parent of all UI in the program.
- * This container is used when St needs to add new content outside the
- * widget hierarchy, for example, when it shows a tooltip over a widget.
- */
-void
-st_set_ui_root (ClutterStage     *stage,
-                ClutterContainer *container)
-{
-  ClutterContainer *previous;
-
-  g_return_if_fail (CLUTTER_IS_STAGE (stage));
-  g_return_if_fail (CLUTTER_IS_CONTAINER (container));
-
-  previous = st_get_ui_root (stage);
-  if (previous)
-    g_signal_handlers_disconnect_by_func (container, st_ui_root_destroyed, stage);
-
-  if (container)
-    {
-      g_signal_connect (container, "destroy", G_CALLBACK (st_ui_root_destroyed), stage);
-      g_object_set_qdata_full (G_OBJECT (stage), st_ui_root_quark (), g_object_ref (container), g_object_unref);
-    }
-}
-
-/**
- * st_get_ui_root:
- * @stage: a #ClutterStage
- *
- * Returns: (transfer none): the container which should be the parent of all user interface,
- *   which can be set with st_set_ui_root(). If not set, returns @stage
- */
-ClutterContainer *
-st_get_ui_root (ClutterStage *stage)
-{
-  ClutterContainer *root;
-
-  g_return_val_if_fail (CLUTTER_IS_STAGE (stage), NULL);
-
-  root = g_object_get_qdata (G_OBJECT (stage), st_ui_root_quark ());
-
-  if (root != NULL)
-    return root;
-  else
-    return CLUTTER_CONTAINER (stage);
 }
 
 static void
@@ -2543,4 +2729,21 @@ check_labels (StWidgetAccessible *widget_accessible,
                                    ATK_RELATION_LABEL_FOR,
                                    ATK_OBJECT (widget_accessible));
     }
+}
+
+/**
+ * st_widget_get_focus_chain:
+ * @widget: An #StWidget
+ *
+ * Gets a list of the focusable children of @widget, in "Tab"
+ * order. By default, this returns all visible
+ * (as in CLUTTER_ACTOR_IS_VISIBLE()) children of @widget.
+ *
+ * Returns: (element-type Clutter.Actor) (transfer container):
+ *   @widget's focusable children
+ */
+GList *
+st_widget_get_focus_chain (StWidget *widget)
+{
+  return ST_WIDGET_GET_CLASS (widget)->get_focus_chain (widget);
 }

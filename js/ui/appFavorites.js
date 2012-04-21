@@ -6,11 +6,9 @@ const Signals = imports.signals;
 
 const Main = imports.ui.main;
 
-function AppFavorites() {
-    this._init();
-}
+const AppFavorites = new Lang.Class({
+    Name: 'AppFavorites',
 
-AppFavorites.prototype = {
     FAVORITE_APPS_KEY: 'favorite-apps',
 
     _init: function() {
@@ -65,8 +63,6 @@ AppFavorites.prototype = {
         if (appId in this._favorites)
             return false;
 
-		global.log(appId);
-		
         let app = Shell.AppSystem.get_default().lookup_app(appId);
 
         if (!app)
@@ -124,7 +120,7 @@ AppFavorites.prototype = {
             this._addFavorite(appId, pos);
         }));
     }
-};
+});
 Signals.addSignalMethods(AppFavorites.prototype);
 
 var appFavoritesInstance = null;

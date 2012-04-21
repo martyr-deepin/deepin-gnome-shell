@@ -6,16 +6,15 @@ const Lang = imports.lang;
 const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 
 const Main = imports.ui.main;
 const Params = imports.misc.params;
 const PopupMenu = imports.ui.popupMenu;
 
-function ButtonBox(params) {
-    this._init.apply(this, arguments);
-};
+const ButtonBox = new Lang.Class({
+    Name: 'ButtonBox',
 
-ButtonBox.prototype = {
     _init: function(params) {
         params = Params.parse(params, { style_class: 'panel-button' }, true);
         this.actor = new Shell.GenericContainer(params);
@@ -92,44 +91,71 @@ ButtonBox.prototype = {
 
         child.allocate(childBox, flags);
     },
-}
+});
 
-function Button(menuAlignment) {
-    this._init(menuAlignment);
-}
+const Button = new Lang.Class({
+    Name: 'PanelMenuButton',
+    Extends: ButtonBox,
 
-Button.prototype = {
-    __proto__: ButtonBox.prototype,
-
-    _init: function(menuAlignment) {
-        ButtonBox.prototype._init.call(this, { reactive: true,
-                                               can_focus: true,
-                                               track_hover: true });
+    _init: function(menuAlignment, nameText, dontCreateMenu) {
+        this.parent({ reactive: true,
+                      can_focus: true,
+                      track_hover: true,
+                      accessible_role: Atk.Role.MENU });
 
         this.actor.connect('button-press-event', Lang.bind(this, this._onButtonPress));
         this.actor.connect('key-press-event', Lang.bind(this, this._onSourceKeyPress));
-        this.menu = new PopupMenu.PopupMenu(this.actor, menuAlignment, St.Side.TOP);
-        this.menu.actor.add_style_class_name('panel-menu');
-        this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
-        this.menu.actor.connect('key-press-event', Lang.bind(this, this._onMenuKeyPress));
-        Main.uiGroup.add_actor(this.menu.actor);
-        this.menu.actor.hide();
+
+        if (dontCreateMenu)
+            this.menu = null;
+        else
+            this.setMenu(new PopupMenu.PopupMenu(this.actor, menuAlignment, St.Side.TOP, 0));
+
+        this.setName(nameText);
+    },
+
+    setName: function(text) {
+        if (text != null) {
+            // This is the easiest way to provide a accessible name to
+            // this widget. The label could be also used for other
+            // purposes in the future.
+            if (!this.label) {
+                this.label = new St.Label({ text: text });
+                this.actor.label_actor = this.label;
+            } else
+                this.label.text = text;
+        } else {
+            this.label = null;
+            this.actor.label_actor = null;
+        }
+    },
+
+    setMenu: function(menu) {
+        if (this.menu)
+            this.menu.destroy();
+
+        this.menu = menu;
+        if (this.menu) {
+            this.menu.actor.add_style_class_name('panel-menu');
+            this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
+            this.menu.actor.connect('key-press-event', Lang.bind(this, this._onMenuKeyPress));
+
+            Main.uiGroup.add_actor(this.menu.actor);
+            this.menu.actor.hide();
+        }
     },
 
     _onButtonPress: function(actor, event) {
-        if (!this.menu.isOpen) {
-            // Setting the max-height won't do any good if the minimum height of the
-            // menu is higher then the screen; it's useful if part of the menu is
-            // scrollable so the minimum height is smaller than the natural height
-            let monitor = Main.layoutManager.primaryMonitor;
-            this.menu.actor.style = ('max-height: ' +
-                                     Math.round(monitor.height - Main.panel.actor.height) +
-                                     'px;');
-        }
+        if (!this.menu)
+            return;
+
         this.menu.toggle();
     },
 
     _onSourceKeyPress: function(actor, event) {
+        if (!this.menu)
+            return false;
+
         let symbol = event.get_key_symbol();
         if (symbol == Clutter.KEY_space || symbol == Clutter.KEY_Return) {
             this.menu.toggle();
@@ -165,6 +191,14 @@ Button.prototype = {
             this.actor.add_style_pseudo_class('active');
         else
             this.actor.remove_style_pseudo_class('active');
+
+        // Setting the max-height won't do any good if the minimum height of the
+        // menu is higher then the screen; it's useful if part of the menu is
+        // scrollable so the minimum height is smaller than the natural height
+        let monitor = Main.layoutManager.primaryMonitor;
+        this.menu.actor.style = ('max-height: ' +
+                                 Math.round(monitor.height - Main.panel.actor.height) +
+                                 'px;');
     },
 
     destroy: function() {
@@ -175,30 +209,27 @@ Button.prototype = {
 
         this.emit('destroy');
     }
-};
+});
 Signals.addSignalMethods(Button.prototype);
 
 /* SystemStatusButton:
  *
  * This class manages one System Status indicator (network, keyboard,
  * volume, bluetooth...), which is just a PanelMenuButton with an
- * icon and a tooltip
+ * icon.
  */
-function SystemStatusButton() {
-    this._init.apply(this, arguments);
-}
+const SystemStatusButton = new Lang.Class({
+    Name: 'SystemStatusButton',
+    Extends: Button,
 
-SystemStatusButton.prototype = {
-    __proto__: Button.prototype,
+    _init: function(iconName, nameText) {
+        this.parent(0.0, nameText);
 
-    _init: function(iconName,tooltipText) {
-        Button.prototype._init.call(this, 0.0);
         this._iconActor = new St.Icon({ icon_name: iconName,
                                         icon_type: St.IconType.SYMBOLIC,
                                         style_class: 'system-status-icon' });
         this.actor.add_actor(this._iconActor);
         this.actor.add_style_class_name('panel-status-button');
-        this.setTooltip(tooltipText);
     },
 
     setIcon: function(iconName) {
@@ -207,16 +238,5 @@ SystemStatusButton.prototype = {
 
     setGIcon: function(gicon) {
         this._iconActor.gicon = gicon;
-    },
-
-    setTooltip: function(text) {
-        if (text != null) {
-            this.tooltip = text;
-            this.actor.has_tooltip = true;
-            this.actor.tooltip_text = text;
-        } else {
-            this.actor.has_tooltip = false;
-            this.tooltip = null;
-        }
     }
-};
+});

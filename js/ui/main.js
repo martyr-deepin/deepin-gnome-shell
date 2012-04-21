@@ -1,11 +1,9 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Clutter = imports.gi.Clutter;
-const DBus = imports.dbus;
 const Gdk = imports.gi.Gdk;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
-const GConf = imports.gi.GConf;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const Meta = imports.gi.Meta;
@@ -39,6 +37,7 @@ const XdndHandler = imports.ui.xdndHandler;
 const StatusIconDispatcher = imports.ui.statusIconDispatcher;
 const Util = imports.misc.util;
 
+const OVERRIDES_SCHEMA = 'org.gnome.shell.overrides';
 const DEFAULT_BACKGROUND_COLOR = new Clutter.Color();
 DEFAULT_BACKGROUND_COLOR.from_pixel(0x2266bbff);
 
@@ -72,6 +71,7 @@ let _startDate;
 let _defaultCssStylesheet = null;
 let _cssStylesheet = null;
 let _gdmCssStylesheet = null;
+let _overridesSettings = null;
 
 let background = null;
 
@@ -112,7 +112,9 @@ function _initRecorder() {
         } else {
             // read the parameters from GSettings always in case they have changed
             recorder.set_framerate(recorderSettings.get_int('framerate'));
-            recorder.set_filename('shell-%d%u-%c.' + recorderSettings.get_string('file-extension'));
+            /* Translators: this is a filename used for screencast recording */
+            // xgettext:no-c-format
+            recorder.set_filename(_("Screencast from %d %t") + '.' + recorderSettings.get_string('file-extension'));
             let pipeline = recorderSettings.get_string('pipeline');
 
             if (!pipeline.match(/^\s*$/))
@@ -134,15 +136,11 @@ function _initUserSession() {
     ExtensionSystem.init();
     ExtensionSystem.loadExtensions();
 
-    let shellwm = global.window_manager;
-
-    shellwm.takeover_keybinding('panel_run_dialog');
-    shellwm.connect('keybinding::panel_run_dialog', function () {
+    Meta.keybindings_set_custom_handler('panel-run-dialog', function() {
        getRunDialog().open();
     });
 
-    shellwm.takeover_keybinding('panel_main_menu');
-    shellwm.connect('keybinding::panel_main_menu', function () {
+    Meta.keybindings_set_custom_handler('panel-main-menu', function () {
         overview.toggle();
     });
 
@@ -163,11 +161,6 @@ function start() {
     Gio.DesktopAppInfo.set_desktop_env('GNOME');
 
     shellDBusService = new ShellDBus.GnomeShell();
-    // Force a connection now; dbus.js will do this internally
-    // if we use its name acquisition stuff but we aren't right
-    // now; to do so we'd need to convert from its async calls
-    // back into sync ones.
-    DBus.session.flush();
 
     // Ensure ShellWindowTracker and ShellAppUsage are initialized; this will
     // also initialize ShellAppSystem first.  ShellAppSystem
@@ -177,8 +170,10 @@ function start() {
     // and recalculate application associations, so to avoid
     // races for now we initialize it here.  It's better to
     // be predictable anyways.
-    Shell.WindowTracker.get_default();
+    let tracker = Shell.WindowTracker.get_default();
     Shell.AppUsage.get_default();
+
+    tracker.connect('startup-sequence-changed', _queueCheckWorkspaces);
 
     // The stage is always covered so Clutter doesn't need to clear it; however
     // the color is used as the default contents for the Mutter root background
@@ -198,7 +193,16 @@ function start() {
                         for (let i = 0; i < children.length; i++)
                             children[i].allocate_preferred_size(flags);
                     });
-    St.set_ui_root(global.stage, uiGroup);
+    uiGroup.connect('get-preferred-width',
+                    function(actor, forHeight, alloc) {
+                        let width = global.stage.width;
+                        [alloc.min_size, alloc.natural_size] = [width, width];
+                    });
+    uiGroup.connect('get-preferred-height',
+                    function(actor, forWidth, alloc) {
+                        let height = global.stage.height;
+                        [alloc.min_size, alloc.natural_size] = [height, height];
+                    });
     global.window_group.reparent(uiGroup);
     global.overlay_group.reparent(uiGroup);
     global.stage.add_actor(uiGroup);
@@ -253,6 +257,9 @@ function start() {
         Scripting.runPerfScript(module, perfOutput);
     }
 
+    _overridesSettings = new Gio.Settings({ schema: OVERRIDES_SCHEMA });
+    _overridesSettings.connect('changed::dynamic-workspaces', _queueCheckWorkspaces);
+
     global.screen.connect('notify::n-workspaces', _nWorkspacesChanged);
 
     global.screen.connect('window-entered-monitor', _windowEnteredMonitor);
@@ -277,15 +284,28 @@ function _checkWorkspaces() {
     let i;
     let emptyWorkspaces = [];
 
+    if (!Meta.prefs_get_dynamic_workspaces()) {
+        _checkWorkspacesId = 0;
+        return false;
+    }
+
     for (i = 0; i < _workspaces.length; i++) {
         let lastRemoved = _workspaces[i]._lastRemovedWindow;
-        if (lastRemoved &&
-            (lastRemoved.get_window_type() == Meta.WindowType.SPLASHSCREEN ||
-             lastRemoved.get_window_type() == Meta.WindowType.DIALOG ||
-             lastRemoved.get_window_type() == Meta.WindowType.MODAL_DIALOG))
+        if ((lastRemoved &&
+             (lastRemoved.get_window_type() == Meta.WindowType.SPLASHSCREEN ||
+              lastRemoved.get_window_type() == Meta.WindowType.DIALOG ||
+              lastRemoved.get_window_type() == Meta.WindowType.MODAL_DIALOG)) ||
+            _workspaces[i]._keepAliveId)
                 emptyWorkspaces[i] = false;
         else
             emptyWorkspaces[i] = true;
+    }
+
+    let sequences = Shell.WindowTracker.get_default().get_startup_sequences();
+    for (i = 0; i < sequences.length; i++) {
+        let index = sequences[i].get_workspace();
+        if (index >= 0 && index <= global.screen.n_workspaces)
+            emptyWorkspaces[index] = false;
     }
 
     let windows = global.get_window_actors();
@@ -335,6 +355,17 @@ function _checkWorkspaces() {
     return false;
 }
 
+function keepWorkspaceAlive(workspace, duration) {
+    if (workspace._keepAliveId)
+        Mainloop.source_remove(workspace._keepAliveId);
+
+    workspace._keepAliveId = Mainloop.timeout_add(duration, function() {
+        workspace._keepAliveId = 0;
+        _queueCheckWorkspaces();
+        return false;
+    });
+}
+
 function _windowRemoved(workspace, window) {
     workspace._lastRemovedWindow = window;
     _queueCheckWorkspaces();
@@ -343,6 +374,7 @@ function _windowRemoved(workspace, window) {
             workspace._lastRemovedWindow = null;
             _queueCheckWorkspaces();
         }
+        return false;
     });
 }
 
@@ -578,20 +610,11 @@ function _globalKeyPressHandler(actor, event) {
 
     let symbol = event.get_key_symbol();
     let keyCode = event.get_key_code();
-    let modifierState = Shell.get_event_state(event);
+    let ignoredModifiers = global.display.get_ignored_modifier_mask();
+    let modifierState = event.get_state() & ~ignoredModifiers;
 
     // This relies on the fact that Clutter.ModifierType is the same as Gdk.ModifierType
     let action = global.display.get_keybinding_action(keyCode, modifierState);
-
-    // The screenshot action should always be available (even if a
-    // modal dialog is present)
-    if (action == Meta.KeyBindingAction.COMMAND_SCREENSHOT) {
-        let gconf = GConf.Client.get_default();
-        let command = gconf.get_string('/apps/metacity/keybinding_commands/command_screenshot');
-        if (command != null && command != '')
-            Util.spawnCommandLine(command);
-        return true;
-    }
 
     // Other bindings are only available to the user session when the overview is up and
     // no modal dialog is present.
@@ -668,14 +691,17 @@ function _findModal(actor) {
  * initiated event.  If not provided then the value of
  * global.get_current_time() is assumed.
  *
+ * @options: optional Meta.ModalOptions flags to indicate that the
+ *           pointer is alrady grabbed
+ *
  * Returns: true iff we successfully acquired a grab or already had one
  */
-function pushModal(actor, timestamp) {
+function pushModal(actor, timestamp, options) {
     if (timestamp == undefined)
         timestamp = global.get_current_time();
 
     if (modalCount == 0) {
-        if (!global.begin_modal(timestamp)) {
+        if (!global.begin_modal(timestamp, options ? options : 0)) {
             log('pushModal: invocation of begin_modal failed');
             return false;
         }

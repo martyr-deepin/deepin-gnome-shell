@@ -13,6 +13,7 @@ G_BEGIN_DECLS
 typedef struct _ShellApp ShellApp;
 typedef struct _ShellAppClass ShellAppClass;
 typedef struct _ShellAppPrivate ShellAppPrivate;
+typedef struct _ShellAppAction ShellAppAction;
 
 #define SHELL_TYPE_APP              (shell_app_get_type ())
 #define SHELL_APP(object)           (G_TYPE_CHECK_INSTANCE_CAST ((object), SHELL_TYPE_APP, ShellApp))
@@ -36,6 +37,7 @@ typedef enum {
 GType shell_app_get_type (void) G_GNUC_CONST;
 
 const char *shell_app_get_id (ShellApp *app);
+
 GMenuTreeEntry *shell_app_get_tree_entry (ShellApp *app);
 GDesktopAppInfo *shell_app_get_app_info (ShellApp *app);
 
@@ -78,6 +80,8 @@ gboolean shell_app_launch (ShellApp     *app,
 int shell_app_compare_by_name (ShellApp *app, ShellApp *other);
 
 int shell_app_compare (ShellApp *app, ShellApp *other);
+
+void shell_app_update_window_actions (ShellApp *app, MetaWindow *window);
 
 G_END_DECLS
 

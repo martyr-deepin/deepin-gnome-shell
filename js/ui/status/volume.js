@@ -1,7 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Clutter = imports.gi.Clutter;
-const DBus = imports.dbus;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const Shell = imports.gi.Shell;
@@ -18,15 +17,12 @@ const VOLUME_ADJUSTMENT_STEP = 0.05; /* Volume adjustment step in % */
 
 const VOLUME_NOTIFY_ID = 1;
 
-function Indicator() {
-    this._init.apply(this, arguments);
-}
-
-Indicator.prototype = {
-    __proto__: PanelMenu.SystemStatusButton.prototype,
+const Indicator = new Lang.Class({
+    Name: 'VolumeIndicator',
+    Extends: PanelMenu.SystemStatusButton,
 
     _init: function() {
-        PanelMenu.SystemStatusButton.prototype._init.call(this, 'audio-volume-muted', null);
+        this.parent('audio-volume-muted', _("Volume"));
 
         this._control = new Gvc.MixerControl({ name: 'GNOME Shell Volume Control' });
         this._control.connect('state-changed', Lang.bind(this, this._onControlStateChanged));
@@ -39,6 +35,7 @@ Indicator.prototype = {
         this._output = null;
         this._outputVolumeId = 0;
         this._outputMutedId = 0;
+        /* Translators: This is the label for audio volume */
         this._outputTitle = new PopupMenu.PopupMenuItem(_("Volume"), { reactive: false });
         this._outputSlider = new PopupMenu.PopupSliderMenuItem(0);
         this._outputSlider.connect('value-changed', Lang.bind(this, this._sliderChanged, '_output'));
@@ -217,4 +214,4 @@ Indicator.prototype = {
         if (property == '_output' && !this._output.is_muted)
             this.setIcon(this._volumeToIcon(this._output.volume));
     }
-};
+});

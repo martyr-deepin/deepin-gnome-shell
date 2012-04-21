@@ -161,28 +161,25 @@ st_icon_type_get_type(void) {
       static const GEnumValue values[] = {
         { ST_ICON_SYMBOLIC, "ST_ICON_SYMBOLIC", "symbolic" },
         { ST_ICON_FULLCOLOR, "ST_ICON_FULLCOLOR", "fullcolor" },
-        { ST_ICON_APPLICATION, "ST_ICON_APPLICATION", "application" },
-        { ST_ICON_DOCUMENT, "ST_ICON_DOCUMENT", "document" },
         { 0, NULL, NULL }
       };
       enum_type_id = g_enum_register_static (g_intern_static_string ("StIconType"), values);
     }
   return enum_type_id;
 }
-/* enumerations from "./st/st-widget.h" */
-#include "./st/st-widget.h"
 GType
-st_text_direction_get_type(void) {
+st_background_size_get_type(void) {
   static GType enum_type_id = 0;
   if (G_UNLIKELY (!enum_type_id))
     {
       static const GEnumValue values[] = {
-        { ST_TEXT_DIRECTION_NONE, "ST_TEXT_DIRECTION_NONE", "none" },
-        { ST_TEXT_DIRECTION_LTR, "ST_TEXT_DIRECTION_LTR", "ltr" },
-        { ST_TEXT_DIRECTION_RTL, "ST_TEXT_DIRECTION_RTL", "rtl" },
+        { ST_BACKGROUND_SIZE_AUTO, "ST_BACKGROUND_SIZE_AUTO", "auto" },
+        { ST_BACKGROUND_SIZE_CONTAIN, "ST_BACKGROUND_SIZE_CONTAIN", "contain" },
+        { ST_BACKGROUND_SIZE_COVER, "ST_BACKGROUND_SIZE_COVER", "cover" },
+        { ST_BACKGROUND_SIZE_FIXED, "ST_BACKGROUND_SIZE_FIXED", "fixed" },
         { 0, NULL, NULL }
       };
-      enum_type_id = g_enum_register_static (g_intern_static_string ("StTextDirection"), values);
+      enum_type_id = g_enum_register_static (g_intern_static_string ("StBackgroundSize"), values);
     }
   return enum_type_id;
 }

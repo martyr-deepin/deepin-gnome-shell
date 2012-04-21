@@ -10,6 +10,7 @@ const Pango = imports.gi.Pango;
 const St = imports.gi.St;
 const Shell = imports.gi.Shell;
 const Signals = imports.signals;
+const Atk = imports.gi.Atk;
 
 const Params = imports.misc.params;
 
@@ -29,11 +30,9 @@ const State = {
     FADED_OUT: 4
 };
 
-function ModalDialog() {
-    this._init();
-}
+const ModalDialog = new Lang.Class({
+    Name: 'ModalDialog',
 
-ModalDialog.prototype = {
     _init: function(params) {
         params = Params.parse(params, { shellReactive: false,
                                         styleClass: null });
@@ -42,13 +41,14 @@ ModalDialog.prototype = {
         this._hasModal = false;
         this._shellReactive = params.shellReactive;
 
-        this._group = new St.Group({ visible: false,
-                                     x: 0,
-                                     y: 0 });
+        this._group = new St.Widget({ visible: false,
+                                      x: 0,
+                                      y: 0,
+                                      accessible_role: Atk.Role.DIALOG });
         Main.uiGroup.add_actor(this._group);
 
         let constraint = new Clutter.BindConstraint({ source: global.stage,
-                                                      coordinate: Clutter.BindCoordinate.POSITION | Clutter.BindCoordinate.SIZE });
+                                                      coordinate: Clutter.BindCoordinate.ALL });
         this._group.add_constraint(constraint);
 
         this._group.connect('destroy', Lang.bind(this, this._onGroupDestroy));
@@ -89,6 +89,7 @@ ModalDialog.prototype = {
                                  y_align: St.Align.START });
 
         this._buttonLayout = new St.BoxLayout({ style_class: 'modal-dialog-button-box',
+                                                visible:     false,
                                                 vertical:    false });
         this._dialogLayout.add(this._buttonLayout,
                                { expand:  true,
@@ -97,6 +98,7 @@ ModalDialog.prototype = {
 
         global.focus_manager.add_group(this._dialogLayout);
         this._initialKeyFocus = this._dialogLayout;
+        this._initialKeyFocusDestroyId = 0;
         this._savedKeyFocus = null;
     },
 
@@ -107,10 +109,12 @@ ModalDialog.prototype = {
     setButtons: function(buttons) {
         let hadChildren = this._buttonLayout.get_children() > 0;
 
-        this._buttonLayout.destroy_children();
+        this._buttonLayout.destroy_all_children();
         this._actionKeys = {};
 
-        for (let i = 0; i < buttons.length; i ++) {
+        this._buttonLayout.visible = (buttons.length > 0);
+
+        for (let i = 0; i < buttons.length; i++) {
             let buttonInfo = buttons[i];
             let label = buttonInfo['label'];
             let action = buttonInfo['action'];
@@ -131,8 +135,7 @@ ModalDialog.prototype = {
             else
                 x_alignment = St.Align.MIDDLE;
 
-            if (this._initialKeyFocus == this._dialogLayout ||
-                this._buttonLayout.contains(this._initialKeyFocus))
+            if (!this._initialKeyFocusDestroyId)
                 this._initialKeyFocus = buttonInfo.button;
             this._buttonLayout.add(buttonInfo.button,
                                    { expand: true,
@@ -202,7 +205,15 @@ ModalDialog.prototype = {
     },
 
     setInitialKeyFocus: function(actor) {
+        if (this._initialKeyFocusDestroyId)
+            this._initialKeyFocus.disconnect(this._initialKeyFocusDestroyId);
+
         this._initialKeyFocus = actor;
+
+        this._initialKeyFocusDestroyId = actor.connect('destroy', Lang.bind(this, function() {
+            this._initialKeyFocus = this._dialogLayout;
+            this._initialKeyFocusDestroyId = 0;
+        }));
     },
 
     open: function(timestamp) {
@@ -303,5 +314,5 @@ ModalDialog.prototype = {
                                })
                          });
     }
-};
+});
 Signals.addSignalMethods(ModalDialog.prototype);

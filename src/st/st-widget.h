@@ -35,12 +35,6 @@
 
 G_BEGIN_DECLS
 
-typedef enum {
-  ST_TEXT_DIRECTION_NONE,
-  ST_TEXT_DIRECTION_LTR,
-  ST_TEXT_DIRECTION_RTL
-} StTextDirection;
-
 #define ST_TYPE_WIDGET                 (st_widget_get_type ())
 #define ST_WIDGET(obj)                 (G_TYPE_CHECK_INSTANCE_CAST ((obj), ST_TYPE_WIDGET, StWidget))
 #define ST_IS_WIDGET(obj)              (G_TYPE_CHECK_INSTANCE_TYPE ((obj), ST_TYPE_WIDGET))
@@ -82,10 +76,19 @@ struct _StWidgetClass
   void     (* popup_menu)          (StWidget         *self);
 
   /* vfuncs */
+
+  /**
+   * StWidgetClass::navigate_focus:
+   * @self: the "top level" container
+   * @from: (allow-none): the actor that the focus is coming from
+   * @direction: the direction focus is moving in
+   */
   gboolean (* navigate_focus)      (StWidget         *self,
                                     ClutterActor     *from,
                                     GtkDirectionType  direction);
   GType    (* get_accessible_type) (void);
+
+  GList *  (* get_focus_chain)     (StWidget         *widget);
 };
 
 GType st_widget_get_type (void) G_GNUC_CONST;
@@ -117,16 +120,6 @@ void                  st_widget_set_theme                 (StWidget        *acto
                                                            StTheme         *theme);
 StTheme *             st_widget_get_theme                 (StWidget        *actor);
 
-void                  st_widget_set_has_tooltip           (StWidget        *widget,
-                                                           gboolean         has_tooltip);
-gboolean              st_widget_get_has_tooltip           (StWidget        *widget);
-void                  st_widget_set_tooltip_text          (StWidget        *widget,
-                                                           const gchar     *text);
-const gchar*          st_widget_get_tooltip_text          (StWidget        *widget);
-
-void                  st_widget_show_tooltip              (StWidget        *widget);
-void                  st_widget_hide_tooltip              (StWidget        *widget);
-
 void                  st_widget_set_track_hover           (StWidget        *widget,
                                                            gboolean         track_hover);
 gboolean              st_widget_get_track_hover           (StWidget        *widget);
@@ -136,13 +129,6 @@ void                  st_widget_sync_hover                (StWidget        *widg
 gboolean              st_widget_get_hover                 (StWidget        *widget);
 
 void                  st_widget_ensure_style              (StWidget        *widget);
-
-StTextDirection       st_widget_get_default_direction     (void);
-void                  st_widget_set_default_direction     (StTextDirection  dir);
-
-StTextDirection       st_widget_get_direction             (StWidget        *self);
-void                  st_widget_set_direction             (StWidget        *self,
-                                                           StTextDirection  dir);
 
 void                  st_widget_set_can_focus             (StWidget        *widget,
                                                            gboolean         can_focus);
@@ -161,14 +147,26 @@ void                  st_widget_style_changed             (StWidget        *widg
 StThemeNode *         st_widget_get_theme_node            (StWidget        *widget);
 StThemeNode *         st_widget_peek_theme_node           (StWidget        *widget);
 
+GList *               st_widget_get_focus_chain           (StWidget        *widget);
+void                  st_widget_paint_background          (StWidget        *widget);
+
+
 /* debug methods */
 char  *st_describe_actor       (ClutterActor *actor);
 void   st_set_slow_down_factor (gfloat factor);
 gfloat st_get_slow_down_factor (void);
 
-void              st_set_ui_root (ClutterStage     *stage,
-                                  ClutterContainer *container);
-ClutterContainer *st_get_ui_root (ClutterStage     *stage);
+/* accessibility methods */
+void                  st_widget_set_accessible_role      (StWidget    *widget,
+                                                          AtkRole      role);
+AtkRole               st_widget_get_accessible_role      (StWidget    *widget);
+void                  st_widget_add_accessible_state     (StWidget    *widget,
+                                                          AtkStateType state);
+void                  st_widget_remove_accessible_state  (StWidget    *widget,
+                                                          AtkStateType state);
+void                  st_widget_set_accessible_name      (StWidget    *widget,
+                                                          const gchar *name);
+const gchar *         st_widget_get_accessible_name      (StWidget    *widget);
 
 G_END_DECLS
 

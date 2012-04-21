@@ -26,6 +26,10 @@ GType shell_session_type_get_type (void) G_GNUC_CONST;
 GType shell_mobile_access_method_type_get_type (void) G_GNUC_CONST;
 #define SHELL_TYPE_MOBILE_ACCESS_METHOD_TYPE (shell_mobile_access_method_type_get_type())
 
+/* enumerations from "./shell-network-agent.h" */
+GType shell_network_agent_response_get_type (void) G_GNUC_CONST;
+#define SHELL_TYPE_NETWORK_AGENT_RESPONSE (shell_network_agent_response_get_type())
+
 G_END_DECLS
 
 #endif /* !__SHELL_ENUM_TYPES_H__ */

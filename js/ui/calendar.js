@@ -1,6 +1,5 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
-const DBus = imports.dbus;
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const Lang = imports.lang;
@@ -156,28 +155,24 @@ function _getEventDayAbbreviation(dayNumber) {
 
 // Abstraction for an appointment/event in a calendar
 
-function CalendarEvent(date, end, summary, allDay) {
-    this._init(date, end, summary, allDay);
-}
+const CalendarEvent = new Lang.Class({
+    Name: 'CalendarEvent',
 
-CalendarEvent.prototype = {
     _init: function(date, end, summary, allDay) {
         this.date = date;
         this.end = end;
         this.summary = summary;
         this.allDay = allDay;
     }
-};
+});
 
 // Interface for appointments/events - e.g. the contents of a calendar
 //
 
 // First, an implementation with no events
-function EmptyEventSource() {
-    this._init();
-}
+const EmptyEventSource = new Lang.Class({
+    Name: 'EmptyEventSource',
 
-EmptyEventSource.prototype = {
     _init: function() {
     },
 
@@ -192,33 +187,32 @@ EmptyEventSource.prototype = {
     hasEvents: function(day) {
         return false;
     }
-};
+});
 Signals.addSignalMethods(EmptyEventSource.prototype);
 
-const CalendarServerIface = {
-    name: 'org.gnome.Shell.CalendarServer',
-    methods: [{ name: 'GetEvents',
-                inSignature: 'xxb',
-                outSignature: 'a(sssbxxa{sv})' }],
-    signals: [{ name: 'Changed',
-                inSignature: '' }]
-};
+const CalendarServerIface = <interface name="org.gnome.Shell.CalendarServer">
+<method name="GetEvents">
+    <arg type="x" direction="in" />
+    <arg type="x" direction="in" />
+    <arg type="b" direction="in" />
+    <arg type="a(sssbxxa{sv})" direction="out" />
+</method>
+<signal name="Changed" />
+</interface>;
 
-const CalendarServer = function () {
-    this._init();
-};
+const CalendarServerInfo  = Gio.DBusInterfaceInfo.new_for_xml(CalendarServerIface);
 
-CalendarServer.prototype = {
-     _init: function() {
-         DBus.session.proxifyObject(this, 'org.gnome.Shell.CalendarServer', '/org/gnome/Shell/CalendarServer');
-     }
-};
+function CalendarServer() {
+    var self = new Gio.DBusProxy({ g_connection: Gio.DBus.session,
+				   g_interface_name: CalendarServerInfo.name,
+				   g_interface_info: CalendarServerInfo,
+				   g_name: 'org.gnome.Shell.CalendarServer',
+				   g_object_path: '/org/gnome/Shell/CalendarServer',
+                                   g_flags: (Gio.DBusProxyFlags.DO_NOT_AUTO_START |
+                                             Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES) });
 
-DBus.proxifyPrototype(CalendarServer.prototype, CalendarServerIface);
-
-// an implementation that reads data from a session bus service
-function DBusEventSource(owner) {
-    this._init(owner);
+    self.init(null);
+    return self;
 }
 
 function _datesEqual(a, b) {
@@ -239,18 +233,22 @@ function _dateIntervalsOverlap(a0, a1, b0, b1)
         return true;
 }
 
+// an implementation that reads data from a session bus service
+const DBusEventSource = new Lang.Class({
+    Name: 'DBusEventSource',
 
-DBusEventSource.prototype = {
-    _init: function(owner) {
+    _init: function() {
         this._resetCache();
 
-        this._dbusProxy = new CalendarServer(owner);
-        this._dbusProxy.connect('Changed', Lang.bind(this, this._onChanged));
+        this._dbusProxy = new CalendarServer();
+        this._dbusProxy.connectSignal('Changed', Lang.bind(this, this._onChanged));
 
-        DBus.session.watch_name('org.gnome.Shell.CalendarServer',
-                                false, // do not launch a name-owner if none exists
-                                Lang.bind(this, this._onNameAppeared),
-                                Lang.bind(this, this._onNameVanished));
+        this._dbusProxy.connect('notify::g-name-owner', Lang.bind(this, function() {
+            if (this._dbusProxy.g_name_owner)
+                this._onNameAppeared();
+            else
+                this._onNameVanished();
+        }));
     },
 
     _resetCache: function() {
@@ -273,7 +271,7 @@ DBusEventSource.prototype = {
         this._loadEvents(false);
     },
 
-    _onEventsReceived: function(appointments) {
+    _onEventsReceived: function([appointments]) {
         let newEvents = [];
         if (appointments != null) {
             for (let n = 0; n < appointments.length; n++) {
@@ -296,9 +294,9 @@ DBusEventSource.prototype = {
 
     _loadEvents: function(forceReload) {
         if (this._curRequestBegin && this._curRequestEnd){
-            let callFlags = 0;
+            let callFlags = Gio.DBusCallFlags.NO_AUTO_START;
             if (forceReload)
-                callFlags |= DBus.CALL_FLAG_START;
+                callFlags = Gio.DBusCallFlags.NONE;
             this._dbusProxy.GetEventsRemote(this._curRequestBegin.getTime() / 1000,
                                             this._curRequestEnd.getTime() / 1000,
                                             forceReload,
@@ -339,17 +337,15 @@ DBusEventSource.prototype = {
 
         return true;
     }
-};
+});
 Signals.addSignalMethods(DBusEventSource.prototype);
 
 // Calendar:
 // @eventSource: is an object implementing the EventSource API, e.g. the
 // requestRange(), getEvents(), hasEvents() methods and the ::changed signal.
-function Calendar(eventSource) {
-    this._init(eventSource);
-}
+const Calendar = new Lang.Class({
+    Name: 'Calendar',
 
-Calendar.prototype = {
     _init: function(eventSource) {
         if (eventSource) {
             this._eventSource = eventSource;
@@ -410,7 +406,7 @@ Calendar.prototype = {
 
     _buildHeader: function() {
         let offsetCols = this._useWeekdate ? 1 : 0;
-        this.actor.destroy_children();
+        this.actor.destroy_all_children();
 
         // Top line of the calendar '<| September 2009 |>'
         this._topBox = new St.BoxLayout();
@@ -615,15 +611,13 @@ Calendar.prototype = {
         if (this._eventSource)
             this._eventSource.requestRange(beginDate, iter, forceReload);
     }
-};
+});
 
 Signals.addSignalMethods(Calendar.prototype);
 
-function EventsList(eventSource) {
-    this._init(eventSource);
-}
+const EventsList = new Lang.Class({
+    Name: 'EventsList',
 
-EventsList.prototype = {
     _init: function(eventSource) {
         this.actor = new St.BoxLayout({ vertical: true, style_class: 'events-header-vbox'});
         this._date = new Date();
@@ -691,7 +685,7 @@ EventsList.prototype = {
     },
 
     _showOtherDay: function(day) {
-        this.actor.destroy_children();
+        this.actor.destroy_all_children();
 
         let dayBegin = _getBeginningOfDay(day);
         let dayEnd = _getEndOfDay(day);
@@ -708,7 +702,7 @@ EventsList.prototype = {
     },
 
     _showToday: function() {
-        this.actor.destroy_children();
+        this.actor.destroy_all_children();
 
         let now = new Date();
         let dayBegin = _getBeginningOfDay(now);
@@ -754,4 +748,4 @@ EventsList.prototype = {
             this._showOtherDay(this._date);
         }
     }
-};
+});

@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 
+include /usr/share/cdbs/1/rules/autoreconf.mk
 include /usr/share/cdbs/1/rules/debhelper.mk
 include /usr/share/cdbs/1/class/autotools.mk
 include /usr/share/cdbs/1/rules/utils.mk
@@ -16,6 +17,7 @@ $(patsubst %,binary-predeb/%,$(DEB_ALL_PACKAGES)) ::
 		/usr/lib/gnome-shell
 	find debian/$(cdbs_curpkg) -name '*.la' -exec rm -f '{}' ';'
 
+DEB_AUTO_UPDATE_AUTOCONF = 2.68
 DEB_CONFIGURE_EXTRA_FLAGS += --enable-compile-warnings=yes
 
 DEB_DH_MAKESHLIBS_ARGS_gnome-shell = -Xlibgnome-shell

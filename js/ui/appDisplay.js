@@ -10,6 +10,7 @@ const Signals = imports.signals;
 const Meta = imports.gi.Meta;
 const St = imports.gi.St;
 const Mainloop = imports.mainloop;
+const Atk = imports.gi.Atk;
 
 const AppFavorites = imports.ui.appFavorites;
 const DND = imports.ui.dnd;
@@ -33,11 +34,9 @@ const CATEGORY_HOVER_TIMEOUT = 100;
 let categoryHoverStatus = {};
 let categoryHoverTimeoutIds = {};
 
-function AlphabeticalView() {
-    this._init();
-}
+const AlphabeticalView = new Lang.Class({
+    Name: 'AlphabeticalView',
 
-AlphabeticalView.prototype = {
     _init: function() {
         this._grid = new IconGrid.IconGrid({ xAlign: St.Align.START });
         this._appSystem = Shell.AppSystem.get_default();
@@ -137,13 +136,11 @@ AlphabeticalView.prototype = {
             this._addApp(app);
          }
     }
-};
+});
 
-function ViewByCategories() {
-    this._init();
-}
+const ViewByCategories = new Lang.Class({
+    Name: 'ViewByCategories',
 
-ViewByCategories.prototype = {
     _init: function() {
         this._appSystem = Shell.AppSystem.get_default();
         this.actor = new St.BoxLayout({ style_class: 'all-app' });
@@ -159,7 +156,9 @@ ViewByCategories.prototype = {
         this._categories = [];
         this._apps = null;
 
-        this._categoryBox = new St.BoxLayout({ vertical: true, reactive: true });
+        this._categoryBox = new St.BoxLayout({ vertical: true,
+                                               reactive: true,
+                                               accessible_role: Atk.Role.LIST });
         this._categoryScroll = new St.ScrollView({ x_fill: false,
                                                    y_fill: false,
                                                    style_class: 'vfade' });
@@ -220,7 +219,7 @@ ViewByCategories.prototype = {
             }
         }
     },
-	
+
 	onCategoryEnter: function(index) {
 		// Enable category hover status.
 		categoryHoverStatus[index] = true;
@@ -244,7 +243,7 @@ ViewByCategories.prototype = {
 			}
 		}
 	},
-	
+											
 	onCategoryTimeout: function(index) {
 		// Just select category when cursor still at selector.
 		if (categoryHoverStatus[index]) {
@@ -256,17 +255,17 @@ ViewByCategories.prototype = {
 
     _addCategory: function(name, index, dir, allApps) {
         let button = new St.Button({ label: GLib.markup_escape_text (name, -1),
-									 reactive: true,
                                      style_class: 'app-filter',
                                      x_align: St.Align.START,
-                                     can_focus: true });
+                                     can_focus: true ,
+                                     accessible_role: Atk.Role.LIST_ITEM });
         button.connect('clicked', Lang.bind(this, function() {
             this._selectCategory(index);
         }));
-		
+
 		button.connect('enter-event', Lang.bind(this, function() {this.onCategoryEnter(index);}));
 		button.connect('leave-event', Lang.bind(this, function() {this.onCategoryLeave(index);}));
-
+		
         var apps;
         if (dir == null) {
             apps = allApps;
@@ -278,7 +277,7 @@ ViewByCategories.prototype = {
                                     name: name,
                                     button: button });
         }
-		
+
 		if (apps.length > 0) {
 			this._categoryBox.add(button, { expand: true, x_fill: true, y_fill: false });
 		}
@@ -286,7 +285,7 @@ ViewByCategories.prototype = {
 
     _removeAll: function() {
         this._categories = [];
-        this._categoryBox.destroy_children();
+        this._categoryBox.destroy_all_children();
     },
 
     refresh: function() {
@@ -327,16 +326,14 @@ ViewByCategories.prototype = {
                 this.actor.navigate_focus(null, Gtk.DirectionType.TAB_FORWARD, false);
         }
     }
-};
+});
 
 /* This class represents a display containing a collection of application items.
  * The applications are sorted based on their name.
  */
-function AllAppDisplay() {
-    this._init();
-}
+const AllAppDisplay = new Lang.Class({
+    Name: 'AllAppDisplay',
 
-AllAppDisplay.prototype = {
     _init: function() {
         this._appSystem = Shell.AppSystem.get_default();
         this._appSystem.connect('installed-changed', Lang.bind(this, function() {
@@ -352,27 +349,30 @@ AllAppDisplay.prototype = {
     _redisplay: function() {
         this._appView.refresh();
     }
-};
+});
 
-function AppSearchProvider() {
-    this._init();
-}
-
-AppSearchProvider.prototype = {
-    __proto__: Search.SearchProvider.prototype,
+const AppSearchProvider = new Lang.Class({
+    Name: 'AppSearchProvider',
+    Extends: Search.SearchProvider,
 
     _init: function() {
-        Search.SearchProvider.prototype._init.call(this, _("APPLICATIONS"));
+        this.parent(_("APPLICATIONS"));
+
         this._appSys = Shell.AppSystem.get_default();
     },
 
-    getResultMeta: function(app) {
-        return { 'id': app,
-                 'name': app.get_name(),
-                 'createIcon': function(size) {
-                                   return app.create_icon_texture(size);
-                               }
-               };
+    getResultMetas: function(apps) {
+        let metas = [];
+        for (let i = 0; i < apps.length; i++) {
+            let app = apps[i];
+            metas.push({ 'id': app,
+                         'name': app.get_name(),
+                         'createIcon': function(size) {
+                             return app.create_icon_texture(size);
+                         }
+                       });
+        }
+        return metas;
     },
 
     getInitialResultSet: function(terms) {
@@ -388,7 +388,7 @@ AppSearchProvider.prototype = {
                                         timestamp: 0 });
 
         let event = Clutter.get_current_event();
-        let modifiers = event ? Shell.get_event_state(event) : 0;
+        let modifiers = event ? event.get_state() : 0;
         let openNewWindow = modifiers & Clutter.ModifierType.CONTROL_MASK;
 
         if (openNewWindow)
@@ -410,28 +410,31 @@ AppSearchProvider.prototype = {
         let icon = new AppWellIcon(app);
         return icon.actor;
     }
-};
+});
 
-function SettingsSearchProvider() {
-    this._init();
-}
-
-SettingsSearchProvider.prototype = {
-    __proto__: Search.SearchProvider.prototype,
+const SettingsSearchProvider = new Lang.Class({
+    Name: 'SettingsSearchProvider',
+    Extends: Search.SearchProvider,
 
     _init: function() {
-        Search.SearchProvider.prototype._init.call(this, _("SETTINGS"));
+        this.parent(_("SETTINGS"));
+
         this._appSys = Shell.AppSystem.get_default();
         this._gnomecc = this._appSys.lookup_app('gnome-control-center.desktop');
     },
 
-    getResultMeta: function(pref) {
-        return { 'id': pref,
-                 'name': pref.get_name(),
-                 'createIcon': function(size) {
-                                   return pref.create_icon_texture(size);
-                               }
-               };
+    getResultMetas: function(prefs) {
+        let metas = [];
+        for (let i = 0; i < prefs.length; i++) {
+            let pref = prefs[i];
+            metas.push({ 'id': pref,
+                         'name': pref.get_name(),
+                         'createIcon': function(size) {
+                             return pref.create_icon_texture(size);
+                         }
+                       });
+        }
+        return metas;
     },
 
     getInitialResultSet: function(terms) {
@@ -458,35 +461,28 @@ SettingsSearchProvider.prototype = {
         let icon = new AppWellIcon(app);
         return icon.actor;
     }
-};
+});
 
-function AppIcon(app, params) {
-    this._init(app, params);
-}
-
-AppIcon.prototype = {
-    __proto__:  IconGrid.BaseIcon.prototype,
+const AppIcon = new Lang.Class({
+    Name: 'AppIcon',
+    Extends: IconGrid.BaseIcon,
 
     _init : function(app, params) {
         this.app = app;
 
         let label = this.app.get_name();
 
-        IconGrid.BaseIcon.prototype._init.call(this,
-                                               label,
-                                               params);
+        this.parent(label, params);
     },
 
     createIcon: function(iconSize) {
         return this.app.create_icon_texture(iconSize);
     }
-};
+});
 
-function AppWellIcon(app, iconParams, onActivateOverride) {
-    this._init(app, iconParams, onActivateOverride);
-}
+const AppWellIcon = new Lang.Class({
+    Name: 'AppWellIcon',
 
-AppWellIcon.prototype = {
     _init : function(app, iconParams, onActivateOverride) {
         this.app = app;
         this.actor = new St.Button({ style_class: 'app-well-app',
@@ -533,6 +529,7 @@ AppWellIcon.prototype = {
                                                 Lang.bind(this,
                                                           this._onStateChanged));
         this._onStateChanged();
+        this.isMenuUp = false;
     },
 
     _onDestroy: function() {
@@ -614,8 +611,8 @@ AppWellIcon.prototype = {
             this._menuManager.addMenu(this._menu);
         }
 
+        this.isMenuUp = true;
         this.actor.set_hover(true);
-        this.actor.show_tooltip();
         this._menu.popup();
 
         return false;
@@ -631,11 +628,12 @@ AppWellIcon.prototype = {
 
     _onMenuPoppedDown: function() {
         this.actor.sync_hover();
+        this.isMenuUp = false;
     },
 
     _onActivate: function (event) {
         this.emit('launching');
-        let modifiers = Shell.get_event_state(event);
+        let modifiers = event.get_state();
 
         if (this._onActivateOverride) {
             this._onActivateOverride(event);
@@ -666,22 +664,19 @@ AppWellIcon.prototype = {
     getDragActorSource: function() {
         return this.icon.icon;
     }
-};
+});
 Signals.addSignalMethods(AppWellIcon.prototype);
 
-function AppIconMenu(source) {
-    this._init(source);
-}
-
-AppIconMenu.prototype = {
-    __proto__: PopupMenu.PopupMenu.prototype,
+const AppIconMenu = new Lang.Class({
+    Name: 'AppIconMenu',
+    Extends: PopupMenu.PopupMenu,
 
     _init: function(source) {
         let side = St.Side.LEFT;
-        if (St.Widget.get_default_direction() == St.TextDirection.RTL)
+        if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
             side = St.Side.RIGHT;
 
-        PopupMenu.PopupMenu.prototype._init.call(this, source.actor, 0.5, side);
+        this.parent(source.actor, 0.5, side);
 
         // We want to keep the item hovered while the menu is up
         this.blockSourceEvents = true;
@@ -726,17 +721,18 @@ AppIconMenu.prototype = {
                 this._appendSeparator();
 
             let isFavorite = AppFavorites.getAppFavorites().isFavorite(this._source.app.get_id());
-			let appId = this._source.app.get_id();
-			let isDesktopIcon = this.isDesktopIcon(appId);
-			
+
             this._newWindowMenuItem = this._appendMenuItem(_("New Window"));
             this._appendSeparator();
 
             this._toggleFavoriteMenuItem = this._appendMenuItem(isFavorite ? _("Remove from Favorites")
                                                                 : _("Add to Favorites"));
+
+			let appId = this._source.app.get_id();
+			let isDesktopIcon = this.isDesktopIcon(appId);
             this._appendSeparator();
 
-            this._toggleAddToDesktopMenuItem = this._appendMenuItem(isDesktopIcon ? _("Remove from Desktop") : _("Add to Desktop"));
+            this._toggleAddToDesktopMenuItem = this._appendMenuItem(isDesktopIcon ? _("Remove from Desktop") : _("Add to Desktop"));			
         }
     },
 
@@ -782,7 +778,7 @@ AppIconMenu.prototype = {
 
         this.close();
     },
-	
+
 	isDesktopIcon: function(appId) {
 		try {
 			let desktopPath = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP);
@@ -801,6 +797,7 @@ AppIconMenu.prototype = {
 		try {
 			let command = "xdg-desktop-icon install --novendor /usr/share/applications/" + appId;
 			Util.trySpawnCommandLine(command);
+			globa.log("Add desktop");
 		} catch (err) {
 			global.log(err);
 		}
@@ -810,9 +807,10 @@ AppIconMenu.prototype = {
 		try {
 			let command = "xdg-desktop-icon uninstall /usr/share/applications/" + appId;
 			Util.trySpawnCommandLine(command);
+			globa.log("Remove desktop");
 		} catch (err) {
 			global.log(err);
 		}
 	}
-};
+});
 Signals.addSignalMethods(AppIconMenu.prototype);

@@ -1,6 +1,7 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Clutter = imports.gi.Clutter;
+const GDesktopEnums = imports.gi.GDesktopEnums;
 const Gio = imports.gi.Gio;
 const Shell = imports.gi.Shell;
 const St = imports.gi.St;
@@ -12,22 +13,6 @@ const Main = imports.ui.main;
 const MagnifierDBus = imports.ui.magnifierDBus;
 const Params = imports.misc.params;
 
-// Keep enums in sync with GSettings schemas
-const MouseTrackingMode = {
-    NONE: 0,
-    CENTERED: 1,
-    PROPORTIONAL: 2,
-    PUSH: 3
-};
-
-const ScreenPosition = {
-    NONE: 0,
-    FULL_SCREEN: 1,
-    TOP_HALF: 2,
-    BOTTOM_HALF: 3,
-    LEFT_HALF: 4,
-    RIGHT_HALF: 5
-};
 
 const MOUSE_POLL_FREQUENCY = 50;
 const CROSSHAIRS_CLIP_SIZE = [100, 100];
@@ -51,17 +36,15 @@ const CROSS_HAIRS_CLIP_KEY      = 'cross-hairs-clip';
 
 let magDBusService = null;
 
-function Magnifier() {
-    this._init();
-}
+const Magnifier = new Lang.Class({
+    Name: 'Magnifier',
 
-Magnifier.prototype = {
     _init: function() {
         // Magnifier is a manager of ZoomRegions.
         this._zoomRegions = [];
 
         // Create small clutter tree for the magnified mouse.
-        let xfixesCursor = Shell.XFixesCursor.get_default();
+        let xfixesCursor = Shell.XFixesCursor.get_for_stage(global.stage);
         this._mouseSprite = new Clutter.Texture();
         xfixesCursor.update_texture_image(this._mouseSprite);
         this._cursorRoot = new Clutter.Group();
@@ -520,7 +503,7 @@ Magnifier.prototype = {
         if (this._zoomRegions.length) {
             let position = this._settings.get_enum(SCREEN_POSITION_KEY);
             this._zoomRegions[0].setScreenPosition(position);
-            if (position != ScreenPosition.FULL_SCREEN)
+            if (position != GDesktopEnums.MagnifierScreenPosition.FULL_SCREEN)
                 this._updateLensMode();
         }
     },
@@ -558,23 +541,22 @@ Magnifier.prototype = {
             );
         }
     }
-};
+});
 Signals.addSignalMethods(Magnifier.prototype);
 
-function ZoomRegion(magnifier, mouseSourceActor) {
-    this._init(magnifier, mouseSourceActor);
-}
+const ZoomRegion = new Lang.Class({
+    Name: 'ZoomRegion',
 
-ZoomRegion.prototype = {
     _init: function(magnifier, mouseSourceActor) {
         this._magnifier = magnifier;
 
-        this._mouseTrackingMode = MouseTrackingMode.NONE;
+        this._mouseTrackingMode = GDesktopEnums.MagnifierMouseTrackingMode.NONE;
         this._clampScrollingAtEdges = false;
         this._lensMode = false;
-        this._screenPosition = ScreenPosition.FULL_SCREEN;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.FULL_SCREEN;
 
         this._magView = null;
+        this._background = null;
         this._uiGroupClone = null;
         this._mouseSourceActor = mouseSourceActor;
         this._mouseActor  = null;
@@ -584,12 +566,15 @@ ZoomRegion.prototype = {
         this._viewPortX = 0;
         this._viewPortY = 0;
         this._viewPortWidth = global.screen_width;
-        this._viewPortWidth = global.screen_height;
+        this._viewPortHeight = global.screen_height;
         this._xCenter = this._viewPortWidth / 2;
         this._yCenter = this._viewPortHeight / 2;
         this._xMagFactor = 1;
         this._yMagFactor = 1;
         this._followingCursor = false;
+
+        Main.layoutManager.connect('monitors-changed',
+                                   Lang.bind(this, this._monitorsChanged));
     },
 
     /**
@@ -647,7 +632,8 @@ ZoomRegion.prototype = {
      * @mode:     One of the enum MouseTrackingMode values.
      */
     setMouseTrackingMode: function(mode) {
-        if (mode >= MouseTrackingMode.NONE && mode <= MouseTrackingMode.PUSH)
+        if (mode >= GDesktopEnums.MagnifierMouseTrackingMode.NONE &&
+            mode <= GDesktopEnums.MagnifierMouseTrackingMode.PUSH)
             this._mouseTrackingMode = mode;
     },
 
@@ -668,7 +654,7 @@ ZoomRegion.prototype = {
      */
     setViewPort: function(viewPort) {
         this._setViewPort(viewPort);
-        this._screenPosition = ScreenPosition.NONE;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.NONE;
     },
 
     /**
@@ -750,7 +736,7 @@ ZoomRegion.prototype = {
         viewPort.width = global.screen_width;
         viewPort.height = global.screen_height/2;
         this._setViewPort(viewPort);
-        this._screenPosition = ScreenPosition.TOP_HALF;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.TOP_HALF;
     },
 
     /**
@@ -764,7 +750,7 @@ ZoomRegion.prototype = {
         viewPort.width = global.screen_width;
         viewPort.height = global.screen_height/2;
         this._setViewPort(viewPort);
-        this._screenPosition = ScreenPosition.BOTTOM_HALF;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.BOTTOM_HALF;
     },
 
     /**
@@ -778,7 +764,7 @@ ZoomRegion.prototype = {
         viewPort.width = global.screen_width/2;
         viewPort.height = global.screen_height;
         this._setViewPort(viewPort);
-        this._screenPosition = ScreenPosition.LEFT_HALF;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.LEFT_HALF;
     },
 
     /**
@@ -792,7 +778,7 @@ ZoomRegion.prototype = {
         viewPort.width = global.screen_width/2;
         viewPort.height = global.screen_height;
         this._setViewPort(viewPort);
-        this._screenPosition = ScreenPosition.RIGHT_HALF;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.RIGHT_HALF;
     },
 
     /**
@@ -808,7 +794,7 @@ ZoomRegion.prototype = {
         viewPort.height = global.screen_height;
         this.setViewPort(viewPort);
 
-        this._screenPosition = ScreenPosition.FULL_SCREEN;
+        this._screenPosition = GDesktopEnums.MagnifierScreenPosition.FULL_SCREEN;
     },
 
     /**
@@ -821,19 +807,19 @@ ZoomRegion.prototype = {
      */
     setScreenPosition: function(inPosition) {
         switch (inPosition) {
-            case ScreenPosition.FULL_SCREEN:
+            case GDesktopEnums.MagnifierScreenPosition.FULL_SCREEN:
                 this.setFullScreenMode();
                 break;
-            case ScreenPosition.TOP_HALF:
+            case GDesktopEnums.MagnifierScreenPosition.TOP_HALF:
                 this.setTopHalf();
                 break;
-            case ScreenPosition.BOTTOM_HALF:
+            case GDesktopEnums.MagnifierScreenPosition.BOTTOM_HALF:
                 this.setBottomHalf();
                 break;
-            case ScreenPosition.LEFT_HALF:
+            case GDesktopEnums.MagnifierScreenPosition.LEFT_HALF:
                 this.setLeftHalf();
                 break;
-            case ScreenPosition.RIGHT_HALF:
+            case GDesktopEnums.MagnifierScreenPosition.RIGHT_HALF:
                 this.setRightHalf();
                 break;
         }
@@ -856,7 +842,7 @@ ZoomRegion.prototype = {
      */
     scrollToMousePos: function() {
         this._followingCursor = true;
-        if (this._mouseTrackingMode != MouseTrackingMode.NONE)
+        if (this._mouseTrackingMode != GDesktopEnums.MagnifierMouseTrackingMode.NONE)
             this._changeROI({ redoCursorTracking: true });
         else
             this._updateMousePosition();
@@ -909,15 +895,15 @@ ZoomRegion.prototype = {
 
         // Add a background for when the magnified uiGroup is scrolled
         // out of view (don't want to see desktop showing through).
-        let background = new Clutter.Rectangle({ color: Main.DEFAULT_BACKGROUND_COLOR });
-        mainGroup.add_actor(background);
+        this._background = new Clutter.Rectangle({ color: Main.DEFAULT_BACKGROUND_COLOR });
+        mainGroup.add_actor(this._background);
 
         // Clone the group that contains all of UI on the screen.  This is the
         // chrome, the windows, etc.
         this._uiGroupClone = new Clutter.Clone({ source: Main.uiGroup });
         mainGroup.add_actor(this._uiGroupClone);
         Main.uiGroup.set_size(global.screen_width, global.screen_height);
-        background.set_size(global.screen_width, global.screen_height);
+        this._background.set_size(global.screen_width, global.screen_height);
 
         // Add either the given mouseSourceActor to the ZoomRegion, or a clone of
         // it.
@@ -941,6 +927,7 @@ ZoomRegion.prototype = {
 
         this._magView.destroy();
         this._magView = null;
+        this._background = null;
         this._uiGroupClone = null;
         this._mouseActor = null;
         this._crossHairsActor = null;
@@ -991,7 +978,7 @@ ZoomRegion.prototype = {
         this._yMagFactor = params.yMagFactor;
 
         if (params.redoCursorTracking &&
-            this._mouseTrackingMode != MouseTrackingMode.NONE) {
+            this._mouseTrackingMode != GDesktopEnums.MagnifierMouseTrackingMode.NONE) {
             // This depends on this.xMagFactor/yMagFactor already being updated
             [params.xCenter, params.yCenter] = this._centerFromMousePosition();
         }
@@ -1041,7 +1028,7 @@ ZoomRegion.prototype = {
     _isFullScreen: function() {
         // Does the magnified view occupy the whole screen? Note that this
         // doesn't necessarily imply
-        // this._screenPosition = ScreenPosition.FULL_SCREEN;
+        // this._screenPosition = GDesktopEnums.MagnifierScreenPosition.FULL_SCREEN;
 
         if (this._viewPortX != 0 || this._viewPortY != 0)
             return false;
@@ -1058,13 +1045,13 @@ ZoomRegion.prototype = {
         let xMouse = this._magnifier.xMouse;
         let yMouse = this._magnifier.yMouse;
 
-        if (this._mouseTrackingMode == MouseTrackingMode.PROPORTIONAL) {
+        if (this._mouseTrackingMode == GDesktopEnums.MagnifierMouseTrackingMode.PROPORTIONAL) {
             return this._centerFromMouseProportional(xMouse, yMouse);
         }
-        else if (this._mouseTrackingMode == MouseTrackingMode.PUSH) {
+        else if (this._mouseTrackingMode == GDesktopEnums.MagnifierMouseTrackingMode.PUSH) {
             return this._centerFromMousePush(xMouse, yMouse);
         }
-        else if (this._mouseTrackingMode == MouseTrackingMode.CENTERED) {
+        else if (this._mouseTrackingMode == GDesktopEnums.MagnifierMouseTrackingMode.CENTERED) {
             return this._centerFromMouseCentered(xMouse, yMouse);
         }
 
@@ -1163,14 +1150,28 @@ ZoomRegion.prototype = {
             this._crossHairsActor.set_position(xMagMouse - groupWidth / 2,
                                                yMagMouse - groupHeight / 2);
         }
+    },
+
+    _monitorsChanged: function() {
+        if (!this.isActive())
+            return;
+
+        Main.uiGroup.set_size(global.screen_width, global.screen_height);
+        this._background.set_size(global.screen_width, global.screen_height);
+
+        if (this._screenPosition == GDesktopEnums.MagnifierScreenPosition.NONE)
+            this._setViewPort({ x: this._viewPortX,
+                                y: this._viewPortY,
+                                width: this._viewPortWidth,
+                                height: this._viewPortHeight });
+        else
+            this.setScreenPosition(this._screenPosition);
     }
-};
+});
 
-function Crosshairs() {
-    this._init();
-}
+const Crosshairs = new Lang.Class({
+    Name: 'Crosshairs',
 
-Crosshairs.prototype = {
     _init: function() {
 
         // Set the group containing the crosshairs to three times the desktop
@@ -1194,6 +1195,14 @@ Crosshairs.prototype = {
         this._actor.add_actor(this._vertBottomHair);
         this._clipSize = [0, 0];
         this._clones = [];
+        this.reCenter();
+
+        Main.layoutManager.connect('monitors-changed',
+                                   Lang.bind(this, this._monitorsChanged));
+    },
+
+    _monitorsChanged: function() {
+        this._actor.set_size(global.screen_width * 3, global.screen_height * 3);
         this.reCenter();
     },
 
@@ -1426,4 +1435,4 @@ Crosshairs.prototype = {
         this._vertTopHair.set_position((groupWidth - thickness) / 2, top);
         this._vertBottomHair.set_position((groupWidth - thickness) / 2, bottom);
     }
-};
+});

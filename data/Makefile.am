@@ -1,5 +1,5 @@
 desktopdir=$(datadir)/applications
-desktop_DATA = gnome-shell.desktop
+desktop_DATA = gnome-shell.desktop gnome-shell-extension-prefs.desktop
 
 # We substitute in bindir so it works as an autostart
 # file when built in a non-system prefix
@@ -12,16 +12,23 @@ desktop_DATA = gnome-shell.desktop
 %.desktop:%.desktop.in
 	$(AM_V_GEN) sed s/^_// < $< > $@ || rm $@
 
-searchprovidersdir = $(pkgdatadir)/search_providers
+searchprovidersdir = $(pkgdatadir)/open-search-providers
 dist_searchproviders_DATA =				\
-	search_providers/google.xml				\
-	search_providers/wikipedia.xml
+	open-search-providers/google.xml		\
+	open-search-providers/wikipedia.xml
+
+introspectiondir = $(datadir)/dbus-1/interfaces
+introspection_DATA = org.gnome.ShellSearchProvider.xml
 
 themedir = $(pkgdatadir)/theme
 dist_theme_DATA =				\
 	theme/calendar-arrow-left.svg		\
 	theme/calendar-arrow-right.svg		\
 	theme/calendar-today.svg		\
+	theme/checkbox-focused.svg		\
+	theme/checkbox-off-focused.svg		\
+	theme/checkbox-off.svg			\
+	theme/checkbox.svg			\
 	theme/close-window.svg			\
 	theme/close.svg				\
 	theme/corner-ripple-ltr.png		\
@@ -31,7 +38,6 @@ dist_theme_DATA =				\
 	theme/filter-selected-rtl.svg		\
 	theme/gdm.css				\
 	theme/gnome-shell.css			\
-	theme/panel-border.svg			\
 	theme/panel-button-border.svg		\
 	theme/panel-button-highlight-narrow.svg	\
 	theme/panel-button-highlight-wide.svg	\
@@ -59,29 +65,26 @@ gschemas.compiled: $(gsettings_SCHEMAS:.xml=.valid)
 
 all-local: gschemas.compiled
 
-
-# GConf schemas: provide defaults for keys from Metacity we are overriding
-gconfschemadir  = @GCONF_SCHEMA_FILE_DIR@
-gconfschema_DATA = gnome-shell.schemas
+convertdir = $(datadir)/GConf/gsettings
+convert_DATA = gnome-shell-overrides.convert
 
 shadersdir = $(pkgdatadir)/shaders
 shaders_DATA = \
 	shaders/dim-window.glsl
 
-install-data-local:
-	GCONF_CONFIG_SOURCE=$(GCONF_SCHEMA_CONFIG_SOURCE) $(GCONFTOOL) --makefile-install-rule $(srcdir)/$(gconfschema_DATA)
-
-
 
 EXTRA_DIST =						\
 	gnome-shell.desktop.in.in			\
+	gnome-shell-extension-prefs.desktop.in.in	\
+	$(introspection_DATA)				\
 	$(menu_DATA)					\
-	$(gconfschema_DATA)				\
 	$(shaders_DATA)					\
+	$(convert_DATA)					\
 	org.gnome.shell.gschema.xml.in
 
 CLEANFILES =						\
 	gnome-shell.desktop.in				\
+	gnome-shell-extension-prefs.in			\
 	$(desktop_DATA)					\
 	$(gsettings_SCHEMAS)				\
 	gschemas.compiled

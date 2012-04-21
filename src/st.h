@@ -6,16 +6,13 @@
 #include <st/st-box-layout-child.h>
 #include <st/st-button.h>
 #include <st/st-clipboard.h>
-#include <st/st-container.h>
 #include <st/st-drawing-area.h>
 #include <st/st-entry.h>
 #include <st/st-focus-manager.h>
-#include <st/st-group.h>
 #include <st/st-icon.h>
 #include <st/st-icon-colors.h>
 #include <st/st-im-text.h>
 #include <st/st-label.h>
-#include <st/st-overflow-box.h>
 #include <st/st-private.h>
 #include <st/st-scrollable.h>
 #include <st/st-scroll-bar.h>
@@ -27,7 +24,6 @@
 #include <st/st-theme.h>
 #include <st/st-theme-context.h>
 #include <st/st-theme-node.h>
-#include <st/st-tooltip.h>
 #include <st/st-types.h>
 #include <st/st-widget.h>
 #include <st/st-widget-accessible.h>

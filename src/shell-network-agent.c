@@ -22,9 +22,9 @@
 #include "config.h"
 #include <string.h>
 #include <gnome-keyring.h>
+#include <dbus/dbus-glib.h>
 
 #include "shell-network-agent.h"
-#include "shell-marshal.h"
 
 enum {
   SIGNAL_NEW_REQUEST,
@@ -48,6 +48,8 @@ typedef struct {
 
   /* <gchar *setting_key, gchar *secret> */
   GHashTable                    *entries;
+  GHashTable                    *vpn_entries;
+  gboolean                       is_vpn;
 } ShellAgentRequest;
 
 struct _ShellNetworkAgentPrivate {
@@ -69,7 +71,6 @@ shell_agent_request_free (gpointer data)
   g_object_unref (request->connection);
   g_free (request->setting_name);
   g_strfreev (request->hints);
-
   g_hash_table_destroy (request->entries);
 
   g_slice_free (ShellAgentRequest, request);
@@ -123,7 +124,8 @@ request_secrets_from_ui (ShellAgentRequest *request)
                  request->request_id,
                  request->connection,
                  request->setting_name,
-                 request->hints);
+                 request->hints,
+                 (int)request->flags);
 }
 
 static void
@@ -227,22 +229,29 @@ get_secrets_keyring_cb (GnomeKeyringResult  result,
 			GList              *list,
 			gpointer            user_data)
 {
-  ShellAgentRequest *closure = user_data;
-  ShellNetworkAgent *self = closure->self;
-  ShellNetworkAgentPrivate *priv = self->priv;
+  ShellAgentRequest *closure;
+  ShellNetworkAgent *self;
+  ShellNetworkAgentPrivate *priv;
   GError *error = NULL;
   gint n_found = 0;
   GList *iter;
   GHashTable *outer;
 
+  if (result == GNOME_KEYRING_RESULT_CANCELLED)
+    return;
+
+  closure = user_data;
+  self = closure->self;
+  priv  = self->priv;
+
   closure->keyring_op = NULL;
 
-  if (result == GNOME_KEYRING_RESULT_CANCELLED)
+  if (result == GNOME_KEYRING_RESULT_DENIED)
     {
       g_set_error (&error,
 		   NM_SECRET_AGENT_ERROR,
 		   NM_SECRET_AGENT_ERROR_USER_CANCELED,
-		   "The secret request was cancelled by the user");
+		   "Access to the secret storage was denied by the user");
 
       closure->callback (NM_SECRET_AGENT (closure->self), closure->connection, NULL, error, closure->callback_data);
 
@@ -275,11 +284,17 @@ get_secrets_keyring_cb (GnomeKeyringResult  result,
               && (attr->type == GNOME_KEYRING_ATTRIBUTE_TYPE_STRING))
             {
               gchar *secret_name = g_strdup (attr->value.string);
-              GValue *secret_value = g_slice_new0 (GValue);
-              g_value_init (secret_value, G_TYPE_STRING);
-              g_value_set_string (secret_value, item->secret);
 
-              g_hash_table_insert (closure->entries, secret_name, secret_value);
+              if (!closure->is_vpn)
+                {
+                  GValue *secret_value = g_slice_new0 (GValue);
+                  g_value_init (secret_value, G_TYPE_STRING);
+                  g_value_set_string (secret_value, item->secret);
+
+                  g_hash_table_insert (closure->entries, secret_name, secret_value);
+                }
+              else
+                g_hash_table_insert (closure->vpn_entries, secret_name, g_strdup (item->secret));
 
               if (closure->hints)
                 n_found += strv_has (closure->hints, secret_name);
@@ -294,7 +309,6 @@ get_secrets_keyring_cb (GnomeKeyringResult  result,
   if (n_found == 0 &&
       (closure->flags & NM_SECRET_AGENT_GET_SECRETS_FLAG_ALLOW_INTERACTION))
     {
-      /* Even if n_found == 0, secrets is not necessarily empty */
       nm_connection_update_secrets (closure->connection, closure->setting_name, closure->entries, NULL);
 
       request_secrets_from_ui (closure);
@@ -328,17 +342,8 @@ shell_network_agent_get_secrets (NMSecretAgent                 *agent,
   NMSettingConnection *setting_connection;
   const char *connection_type;
 
-  /* VPN secrets are currently unimplemented - bail out early */
   setting_connection = nm_connection_get_setting_connection (connection);
   connection_type = nm_setting_connection_get_connection_type (setting_connection);
-  if (strcmp (connection_type, "vpn") == 0)
-    {
-      GError *error = g_error_new (NM_SECRET_AGENT_ERROR,
-                                   NM_SECRET_AGENT_ERROR_AGENT_CANCELED,
-                                   "VPN secrets are currently unhandled.");
-      callback (NM_SECRET_AGENT (self), connection, NULL, error, callback_data);
-      return;
-    }
 
   request = g_slice_new (ShellAgentRequest);
   request->self = g_object_ref (self);
@@ -348,7 +353,23 @@ shell_network_agent_get_secrets (NMSecretAgent                 *agent,
   request->flags = flags;
   request->callback = callback;
   request->callback_data = callback_data;
+  request->is_vpn = !strcmp(connection_type, NM_SETTING_VPN_SETTING_NAME);
+  request->keyring_op = NULL;
   request->entries = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, gvalue_destroy_notify);
+
+  if (request->is_vpn)
+    {
+      GValue *secret_value;
+
+      request->vpn_entries = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+
+      secret_value = g_slice_new0 (GValue);
+      g_value_init (secret_value, dbus_g_type_get_map ("GHashTable", G_TYPE_STRING, G_TYPE_STRING));
+      g_value_take_boxed (secret_value, request->vpn_entries);
+      g_hash_table_insert (request->entries, g_strdup(NM_SETTING_VPN_SECRETS), secret_value);
+    }
+  else
+    request->vpn_entries = NULL;
 
   request->request_id = g_strdup_printf ("%s/%s", connection_path, setting_name);
   g_hash_table_replace (self->priv->requests, request->request_id, request);
@@ -389,17 +410,24 @@ shell_network_agent_set_password (ShellNetworkAgent *self,
   priv = self->priv;
   request = g_hash_table_lookup (priv->requests, request_id);
 
-  value = g_slice_new0 (GValue);
-  g_value_init (value, G_TYPE_STRING);
-  g_value_set_string (value, setting_value);
+  if (!request->is_vpn)
+    {
+      value = g_slice_new0 (GValue);
+      g_value_init (value, G_TYPE_STRING);
+      g_value_set_string (value, setting_value);
 
-  g_hash_table_replace (request->entries, g_strdup (setting_key), value);
+      g_hash_table_replace (request->entries, g_strdup (setting_key), value);
+    }
+  else
+    {
+      g_hash_table_replace (request->vpn_entries, g_strdup (setting_key), g_strdup (setting_value));
+    }
 }
 
 void
-shell_network_agent_respond (ShellNetworkAgent *self,
-                             gchar             *request_id,
-                             gboolean           canceled)
+shell_network_agent_respond (ShellNetworkAgent         *self,
+                             gchar                     *request_id,
+                             ShellNetworkAgentResponse  response)
 {
   ShellNetworkAgentPrivate *priv;
   ShellAgentRequest *request;
@@ -411,7 +439,7 @@ shell_network_agent_respond (ShellNetworkAgent *self,
   priv = self->priv;
   request = g_hash_table_lookup (priv->requests, request_id);
 
-  if (canceled)
+  if (response == SHELL_NETWORK_AGENT_USER_CANCELED)
     {
       GError *error = g_error_new (NM_SECRET_AGENT_ERROR,
                                    NM_SECRET_AGENT_ERROR_USER_CANCELED,
@@ -423,10 +451,24 @@ shell_network_agent_respond (ShellNetworkAgent *self,
       return;
     }
 
+  if (response == SHELL_NETWORK_AGENT_INTERNAL_ERROR)
+    {
+      GError *error = g_error_new (NM_SECRET_AGENT_ERROR,
+                                   NM_SECRET_AGENT_ERROR_INTERNAL_ERROR,
+                                   "An internal error occurred while processing the request.");
+
+      request->callback (NM_SECRET_AGENT (self), request->connection, NULL, error, request->callback_data);
+      g_error_free (error);
+      g_hash_table_remove (priv->requests, request_id);
+      return;
+    }
+
+  /* response == SHELL_NETWORK_AGENT_CONFIRMED */
+
   /* Save updated secrets */
   dup = nm_connection_duplicate (request->connection);
-  nm_connection_update_secrets (dup, request->setting_name, request->entries, NULL);
 
+  nm_connection_update_secrets (dup, request->setting_name, request->entries, NULL);
   nm_secret_agent_save_secrets (NM_SECRET_AGENT (self), dup, NULL, NULL);
 
   outer = g_hash_table_new (g_str_hash, g_str_equal);
@@ -775,13 +817,14 @@ shell_network_agent_class_init (ShellNetworkAgentClass *klass)
 					      0, /* class offset */
 					      NULL, /* accumulator */
 					      NULL, /* accu_data */
-					      _shell_marshal_VOID__STRING_OBJECT_STRING_BOXED,
+                                              NULL, /* marshaller */
 					      G_TYPE_NONE, /* return */
-					      3, /* n_params */
+					      5, /* n_params */
 					      G_TYPE_STRING,
 					      NM_TYPE_CONNECTION,
 					      G_TYPE_STRING,
-                                              G_TYPE_STRV);
+                                              G_TYPE_STRV,
+                                              G_TYPE_INT);
 
   signals[SIGNAL_CANCEL_REQUEST] = g_signal_new ("cancel-request",
                                                  G_TYPE_FROM_CLASS (klass),
@@ -789,7 +832,7 @@ shell_network_agent_class_init (ShellNetworkAgentClass *klass)
                                                  0, /* class offset */
                                                  NULL, /* accumulator */
                                                  NULL, /* accu_data */
-                                                 g_cclosure_marshal_VOID__STRING,
+                                                 NULL, /* marshaller */
                                                  G_TYPE_NONE,
                                                  1, /* n_params */
                                                  G_TYPE_STRING);

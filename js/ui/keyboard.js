@@ -39,34 +39,31 @@ const PRETTY_KEYS = {
     'Alt_L': 'Alt'
 };
 
-const CaribouKeyboardIface = {
-    name: 'org.gnome.Caribou.Keyboard',
-    methods:    [ { name: 'Show',
-                    inSignature: 'u',
-                    outSignature: ''
-                  },
-                  { name: 'Hide',
-                    inSignature: 'u',
-                    outSignature: ''
-                  },
-                  { name: 'SetCursorLocation',
-                    inSignature: 'iiii',
-                    outSignature: ''
-                  },
-                  { name: 'SetEntryLocation',
-                    inSignature: 'iiii',
-                    outSignature: ''
-                  } ],
-    properties: [ { name: 'Name',
-                    signature: 's',
-                    access: 'read' } ]
-};
+const CaribouKeyboardIface = <interface name='org.gnome.Caribou.Keyboard'>
+<method name='Show'>
+    <arg type='u' direction='in' />
+</method>
+<method name='Hide'>
+    <arg type='u' direction='in' />
+</method>
+<method name='SetCursorLocation'>
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+</method>
+<method name='SetEntryLocation'>
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+    <arg type='i' direction='in' />
+</method>
+<property name='Name' access='read' type='s' />
+</interface>;
 
-function Key() {
-    this._init.apply(this, arguments);
-}
+const Key = new Lang.Class({
+    Name: 'Key',
 
-Key.prototype = {
     _init : function(key) {
         this._key = key;
 
@@ -192,15 +189,15 @@ Key.prototype = {
             this._boxPointer.hide(true);
         }
     }
-};
+});
 
-function Keyboard() {
-    this._init.apply(this, arguments);
-}
+const Keyboard = new Lang.Class({
+    // HACK: we can't set Name, because it collides with Name dbus property
+    // Name: 'Keyboard',
 
-Keyboard.prototype = {
     _init: function () {
-        DBus.session.exportObject('/org/gnome/Caribou/Keyboard', this);
+        this._impl = Gio.DBusExportedObject.wrapJSObject(CaribouKeyboardIface, this);
+        this._impl.export(Gio.DBus.session, '/org/gnome/Caribou/Keyboard');
 
         this.actor = null;
 
@@ -272,6 +269,11 @@ Keyboard.prototype = {
 
         this._addKeys();
 
+        // Keys should be layout according to the group, not the
+        // locale; as Caribou already provides the expected layout,
+        // this means enforcing LTR for all locales.
+        this.actor.text_direction = Clutter.TextDirection.LTR;
+
         this._keyboardNotifyId = this._keyboard.connect('notify::active-group', Lang.bind(this, this._onGroupChanged));
         this._focusNotifyId = global.stage.connect('notify::key-focus', Lang.bind(this, this._onKeyFocusChanged));
 
@@ -289,7 +291,7 @@ Keyboard.prototype = {
         if (focus && (focus._extended_keys || (focus._key && focus._key.extended_key)))
             return;
 
-        let time = global.current_event_time();
+        let time = global.get_current_time();
         if (focus instanceof Clutter.Text)
             this.Show(time);
         else
@@ -532,19 +534,15 @@ Keyboard.prototype = {
     get Name() {
         return 'gnome-shell';
     }
-};
-DBus.conformExport(Keyboard.prototype, CaribouKeyboardIface);
+});
 
-function KeyboardSource() {
-    this._init.apply(this, arguments);
-}
-
-KeyboardSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const KeyboardSource = new Lang.Class({
+    Name: 'KeyboardSource',
+    Extends: MessageTray.Source,
 
     _init: function(keyboard) {
+        this.parent(_("Keyboard"));
         this._keyboard = keyboard;
-        MessageTray.Source.prototype._init.call(this, _("Keyboard"));
 
         this._setSummaryIcon(this.createNotificationIcon());
     },
@@ -555,7 +553,7 @@ KeyboardSource.prototype = {
                              icon_size: this.ICON_SIZE });
     },
 
-     handleSummaryClick: function() {
+    handleSummaryClick: function() {
         let event = Clutter.get_current_event();
         if (event.type() != Clutter.EventType.BUTTON_RELEASE)
             return false;
@@ -567,4 +565,4 @@ KeyboardSource.prototype = {
     open: function() {
         this._keyboard.show();
     }
-};
+});

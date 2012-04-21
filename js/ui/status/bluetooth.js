@@ -23,17 +23,13 @@ const ConnectionState = {
     CONNECTING: 3
 }
 
-function Indicator() {
-    this._init.apply(this, arguments);
-}
-
-Indicator.prototype = {
-    __proto__: PanelMenu.SystemStatusButton.prototype,
+const Indicator = new Lang.Class({
+    Name: 'BTIndicator',
+    Extends: PanelMenu.SystemStatusButton,
 
     _init: function() {
-        PanelMenu.SystemStatusButton.prototype._init.call(this, 'bluetooth-disabled', null);
+        this.parent('bluetooth-disabled', _("Bluetooth"));
 
-        GLib.spawn_command_line_sync ('pkill -f "^bluetooth-applet$"');
         this._applet = new GnomeBluetoothApplet.Applet();
 
         this._killswitch = new PopupMenu.PopupSwitchMenuItem(_("Bluetooth"), false);
@@ -185,7 +181,7 @@ Indicator.prototype = {
 
         // update connected property
         if (device.can_connect)
-            item._connectedMenuitem.setToggleState(device.connected);
+            item._connectedMenuItem.setToggleState(device.connected);
     },
 
     _createDeviceItem: function(device) {
@@ -204,10 +200,10 @@ Indicator.prototype = {
 
     _buildDeviceSubMenu: function(item, device) {
         if (device.can_connect) {
-            item._connected = device.connected;
             let menuitem = new PopupMenu.PopupSwitchMenuItem(_("Connection"), device.connected);
-            item._connectedMenuitem = menuitem;
-            item._connectedMenuitem.connect('toggled', Lang.bind(this, function() {
+            item._connected = device.connected;
+            item._connectedMenuItem = menuitem;
+            menuitem.connect('toggled', Lang.bind(this, function() {
                 if (item._connected > ConnectionState.CONNECTED) {
                     // operation already in progress, revert
                     // (should not happen anyway)
@@ -242,7 +238,7 @@ Indicator.prototype = {
                 }
             }));
 
-            item.menu.addMenuItem(item._connectedMenuitem);
+            item.menu.addMenuItem(menuitem);
         }
 
         if (device.capabilities & GnomeBluetoothApplet.Capabilities.OBEX_PUSH) {
@@ -335,17 +331,14 @@ Indicator.prototype = {
     _cancelRequest: function() {
         this._source.destroy();
     }
-}
+});
 
-function Source() {
-    this._init.apply(this, arguments);
-}
-
-Source.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const Source = new Lang.Class({
+    Name: 'BluetoothSource',
+    Extends: MessageTray.Source,
 
     _init: function() {
-        MessageTray.Source.prototype._init.call(this, _("Bluetooth"));
+        this.parent(_("Bluetooth"));
 
         this._setSummaryIcon(this.createNotificationIcon());
     },
@@ -359,7 +352,7 @@ Source.prototype = {
             }
         }));
 
-        MessageTray.Source.prototype.notify.call(this, notification);
+        this.parent(notification);
     },
 
     createNotificationIcon: function() {
@@ -367,21 +360,17 @@ Source.prototype = {
                              icon_type: St.IconType.SYMBOLIC,
                              icon_size: this.ICON_SIZE });
     }
-}
+});
 
-function AuthNotification() {
-    this._init.apply(this, arguments);
-}
-
-AuthNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const AuthNotification = new Lang.Class({
+    Name: 'AuthNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, applet, device_path, name, long_name, uuid) {
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      _("Bluetooth"),
-                                                      _("Authorization request from %s").format(name),
-                                                      { customContent: true });
+        this.parent(source,
+                    _("Bluetooth"),
+                    _("Authorization request from %s").format(name),
+                    { customContent: true });
         this.setResident(true);
 
         this._applet = applet;
@@ -407,21 +396,17 @@ AuthNotification.prototype = {
             this.destroy();
         }));
     }
-}
+});
 
-function ConfirmNotification() {
-    this._init.apply(this, arguments);
-}
-
-ConfirmNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const ConfirmNotification = new Lang.Class({
+    Name: 'ConfirmNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, applet, device_path, name, long_name, pin) {
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      _("Bluetooth"),
-                                                      _("Pairing confirmation for %s").format(name),
-                                                      { customContent: true });
+        this.parent(source,
+                    _("Bluetooth"),
+                    _("Pairing confirmation for %s").format(name),
+                    { customContent: true });
         this.setResident(true);
 
         this._applet = applet;
@@ -440,21 +425,17 @@ ConfirmNotification.prototype = {
             this.destroy();
         }));
     }
-}
+});
 
-function PinNotification() {
-    this._init.apply(this, arguments);
-}
-
-PinNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const PinNotification = new Lang.Class({
+    Name: 'PinNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, applet, device_path, name, long_name, numeric) {
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      _("Bluetooth"),
-                                                      _("Pairing request for %s").format(name),
-                                                      { customContent: true });
+        this.parent(source,
+                    _("Bluetooth"),
+                    _("Pairing request for %s").format(name),
+                    { customContent: true });
         this.setResident(true);
 
         this._applet = applet;
@@ -503,7 +484,7 @@ PinNotification.prototype = {
     },
 
     grabFocus: function(lockTray) {
-        MessageTray.Notification.prototype.grabFocus.call(this, lockTray);
+        this.parent(lockTray);
         global.stage.set_key_focus(this._entry);
     }
-}
+});

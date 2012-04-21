@@ -8,8 +8,8 @@
 #include <X11/extensions/Xfixes.h>
 
 /**
- * SECTION:ShellXFixesCursor
- * short_description: Capture/manipulate system mouse cursor.
+ * SECTION:shell-xfixes-cursor
+ * @short_description: Capture/manipulate system mouse cursor.
  *
  * The #ShellXFixesCursor object uses the XFixes extension to show/hide the
  * the system mouse pointer, to grab its image as it changes, and emit a
@@ -304,8 +304,7 @@ shell_xfixes_cursor_class_init (ShellXFixesCursorClass *klass)
                                        G_TYPE_FROM_CLASS (klass),
                                        G_SIGNAL_RUN_LAST,
                                        0,
-                                       NULL, NULL,
-                                       g_cclosure_marshal_VOID__VOID,
+                                       NULL, NULL, NULL,
                                        G_TYPE_NONE, 0);
 
   gobject_class->get_property = shell_xfixes_cursor_get_property;
@@ -321,19 +320,29 @@ shell_xfixes_cursor_class_init (ShellXFixesCursorClass *klass)
 }
 
 /**
- * shell_xfixes_cursor_get_default:
+ * shell_xfixes_cursor_get_for_stage:
+ * @stage: (transfer none): The #ClutterStage to get the cursor for
  *
- * Return value: (transfer none): The global #ShellXFixesCursor singleton
+ * Return value: (transfer none): A #ShellXFixesCursor instance
  */
 ShellXFixesCursor *
-shell_xfixes_cursor_get_default ()
+shell_xfixes_cursor_get_for_stage (ClutterStage *stage)
 {
-  static ShellXFixesCursor *instance = NULL;
+  ShellXFixesCursor *instance;
+  static GQuark xfixes_cursor_quark;
+
+  if (G_UNLIKELY (xfixes_cursor_quark == 0))
+    xfixes_cursor_quark = g_quark_from_static_string ("gnome-shell-xfixes-cursor");
+
+  instance = g_object_get_qdata (G_OBJECT (stage), xfixes_cursor_quark);
 
   if (instance == NULL)
-    instance = g_object_new (SHELL_TYPE_XFIXES_CURSOR,
-                             "stage", clutter_stage_get_default (),
-                             NULL);
+    {
+      instance = g_object_new (SHELL_TYPE_XFIXES_CURSOR,
+                               "stage", stage,
+                               NULL);
+      g_object_set_qdata (G_OBJECT (stage), xfixes_cursor_quark, instance);
+    }
 
   return instance;
 }

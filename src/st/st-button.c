@@ -41,7 +41,6 @@
 #include "st-button.h"
 
 #include "st-enum-types.h"
-#include "st-marshal.h"
 #include "st-texture-cache.h"
 #include "st-private.h"
 
@@ -164,8 +163,6 @@ st_button_button_press (ClutterActor       *actor,
   StButton *button = ST_BUTTON (actor);
   StButtonMask mask = ST_BUTTON_MASK_FROM_BUTTON (event->button);
 
-  st_widget_hide_tooltip (ST_WIDGET (actor));
-
   if (button->priv->button_mask & mask)
     {
       if (button->priv->grabbed == 0)
@@ -210,12 +207,11 @@ st_button_key_press (ClutterActor    *actor,
 {
   StButton *button = ST_BUTTON (actor);
 
-  st_widget_hide_tooltip (ST_WIDGET (actor));
-
   if (button->priv->button_mask & ST_BUTTON_ONE)
     {
       if (event->keyval == CLUTTER_KEY_space ||
-          event->keyval == CLUTTER_KEY_Return)
+          event->keyval == CLUTTER_KEY_Return ||
+          event->keyval == CLUTTER_KEY_KP_Enter)
         {
           st_button_press (button, ST_BUTTON_ONE);
           return TRUE;
@@ -234,7 +230,8 @@ st_button_key_release (ClutterActor    *actor,
   if (button->priv->button_mask & ST_BUTTON_ONE)
     {
       if (event->keyval == CLUTTER_KEY_space ||
-          event->keyval == CLUTTER_KEY_Return)
+          event->keyval == CLUTTER_KEY_Return ||
+          event->keyval == CLUTTER_KEY_KP_Enter)
         {
           gboolean is_click;
 
@@ -444,8 +441,7 @@ st_button_class_init (StButtonClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   G_STRUCT_OFFSET (StButtonClass, clicked),
-                  NULL, NULL,
-                  _st_marshal_VOID__INT,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 1,
                   G_TYPE_INT);
 }
@@ -740,12 +736,31 @@ static void          st_button_accessible_initialize (AtkObject *obj,
 
 G_DEFINE_TYPE (StButtonAccessible, st_button_accessible, ST_TYPE_WIDGET_ACCESSIBLE)
 
+static const gchar *
+st_button_accessible_get_name (AtkObject *obj)
+{
+  StButton *button = NULL;
+  const gchar *name = NULL;
+
+  button = ST_BUTTON (atk_gobject_accessible_get_object (ATK_GOBJECT_ACCESSIBLE (obj)));
+
+  if (button == NULL)
+    return NULL;
+
+  name = ATK_OBJECT_CLASS (st_button_accessible_parent_class)->get_name (obj);
+  if (name != NULL)
+    return name;
+
+  return button->priv->text;
+}
+
 static void
 st_button_accessible_class_init (StButtonAccessibleClass *klass)
 {
   AtkObjectClass *atk_class = ATK_OBJECT_CLASS (klass);
 
   atk_class->initialize = st_button_accessible_initialize;
+  atk_class->get_name = st_button_accessible_get_name;
 }
 
 static void
@@ -755,10 +770,21 @@ st_button_accessible_init (StButtonAccessible *self)
 }
 
 static void
+st_button_accessible_notify_label_cb (StButton   *button,
+                                      GParamSpec *psec,
+                                      AtkObject  *accessible)
+{
+  g_object_notify (G_OBJECT (accessible), "accessible-name");
+}
+
+static void
 st_button_accessible_initialize (AtkObject *obj,
                                 gpointer   data)
 {
   ATK_OBJECT_CLASS (st_button_accessible_parent_class)->initialize (obj, data);
 
   obj->role = ATK_ROLE_PUSH_BUTTON;
+
+  g_signal_connect (data, "notify::label",
+                    G_CALLBACK (st_button_accessible_notify_label_cb), obj);
 }

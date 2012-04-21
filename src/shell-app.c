@@ -15,6 +15,7 @@
 #include "shell-app-system-private.h"
 #include "shell-window-tracker-private.h"
 #include "st.h"
+#include "gactionmuxer.h"
 
 typedef enum {
   MATCH_NONE,
@@ -30,9 +31,6 @@ typedef enum {
 typedef struct {
   guint refcount;
 
-  /* Last time the user interacted with any of this application's windows */
-  guint32 last_user_time;
-
   /* Signal connection to dirty window sort list on workspace changes */
   guint workspace_switch_id;
 
@@ -40,6 +38,10 @@ typedef struct {
 
   /* Whether or not we need to resort the windows; this is done on demand */
   gboolean window_sort_stale : 1;
+
+  /* See GApplication documentation */
+  GDBusMenuModel   *remote_menu;
+  GActionMuxer     *muxer;
 } ShellAppRunningState;
 
 /**
@@ -73,13 +75,16 @@ struct _ShellApp
   char *name_collation_key;
   char *casefolded_description;
   char *casefolded_exec;
+  char **casefolded_keywords;
 };
-
-G_DEFINE_TYPE (ShellApp, shell_app, G_TYPE_OBJECT);
 
 enum {
   PROP_0,
-  PROP_STATE
+  PROP_STATE,
+  PROP_ID,
+  PROP_DBUS_ID,
+  PROP_ACTION_GROUP,
+  PROP_MENU
 };
 
 enum {
@@ -90,7 +95,10 @@ enum {
 static guint shell_app_signals[LAST_SIGNAL] = { 0 };
 
 static void create_running_state (ShellApp *app);
+static void setup_running_state (ShellApp *app, MetaWindow *window);
 static void unref_running_state (ShellAppRunningState *state);
+
+G_DEFINE_TYPE (ShellApp, shell_app, G_TYPE_OBJECT)
 
 static void
 shell_app_get_property (GObject    *gobject,
@@ -104,6 +112,17 @@ shell_app_get_property (GObject    *gobject,
     {
     case PROP_STATE:
       g_value_set_enum (value, app->state);
+      break;
+    case PROP_ID:
+      g_value_set_string (value, shell_app_get_id (app));
+      break;
+    case PROP_ACTION_GROUP:
+      if (app->running_state)
+        g_value_set_object (value, app->running_state->muxer);
+      break;
+    case PROP_MENU:
+      if (app->running_state)
+        g_value_set_object (value, app->running_state->remote_menu);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
@@ -313,7 +332,9 @@ shell_app_get_faded_icon (ShellApp *app, int size)
   if (!app->entry)
     return window_backed_app_get_icon (app, size);
 
-  cache_key = g_strdup_printf ("faded-icon:%s,size=%d", shell_app_get_id (app), size);
+  /* Use icon: prefix so that we get evicted from the cache on
+   * icon theme changes. */
+  cache_key = g_strdup_printf ("icon:%s,size=%d,faded", shell_app_get_id (app), size);
   data.app = app;
   data.size = size;
   texture = st_texture_cache_load (st_texture_cache_get_default (),
@@ -509,19 +530,38 @@ shell_app_activate_window (ShellApp     *app,
         window = most_recent_transient;
 
 
-      if (!shell_window_tracker_is_window_interesting (window))
-        {
-          /* We won't get notify::user-time signals for uninteresting windows,
-           * which means that an app's last_user_time won't get updated.
-           * Update it here instead.
-           */
-          app->running_state->last_user_time = timestamp;
-        }
-
       if (active != workspace)
         meta_workspace_activate_with_focus (workspace, window, timestamp);
       else
         meta_window_activate (window, timestamp);
+    }
+}
+
+
+void
+shell_app_update_window_actions (ShellApp *app, MetaWindow *window)
+{
+  const char *object_path;
+
+  object_path = meta_window_get_gtk_window_object_path (window);
+  if (object_path != NULL)
+    {
+      GActionGroup *actions;
+
+      actions = g_object_get_data (G_OBJECT (window), "actions");
+      if (actions == NULL)
+        {
+          actions = G_ACTION_GROUP (g_dbus_action_group_get (g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, NULL),
+                                                             meta_window_get_gtk_unique_bus_name (window),
+                                                             object_path));
+          g_object_set_data_full (G_OBJECT (window), "actions", actions, g_object_unref);
+        }
+
+      if (!app->running_state->muxer)
+        app->running_state->muxer = g_action_muxer_new ();
+
+      g_action_muxer_insert (app->running_state->muxer, "win", actions);
+      g_object_notify (G_OBJECT (app), "action-group");
     }
 }
 
@@ -752,6 +792,23 @@ shell_app_is_on_workspace (ShellApp *app,
   return FALSE;
 }
 
+static int
+shell_app_get_last_user_time (ShellApp *app)
+{
+  GSList *iter;
+  int last_user_time;
+
+  last_user_time = 0;
+
+  if (app->running_state != NULL)
+    {
+      for (iter = app->running_state->windows; iter; iter = iter->next)
+        last_user_time = MAX (last_user_time, meta_window_get_user_time (iter->data));
+    }
+
+  return last_user_time;
+}
+
 /**
  * shell_app_compare:
  * @app:
@@ -791,7 +848,8 @@ shell_app_compare (ShellApp *app,
         return -1;
       else if (!app->running_state->windows && other->running_state->windows)
         return 1;
-      return other->running_state->last_user_time - app->running_state->last_user_time;
+
+      return shell_app_get_last_user_time (other) - shell_app_get_last_user_time (app);
     }
 
   return 0;
@@ -871,8 +929,6 @@ shell_app_on_user_time_changed (MetaWindow *window,
 {
   g_assert (app->running_state != NULL);
 
-  app->running_state->last_user_time = meta_window_get_user_time (window);
-
   /* Ideally we don't want to emit windows-changed if the sort order
    * isn't actually changing. This check catches most of those.
    */
@@ -903,8 +959,6 @@ void
 _shell_app_add_window (ShellApp        *app,
                        MetaWindow      *window)
 {
-  guint32 user_time;
-
   if (app->running_state && g_slist_find (app->running_state->windows, window))
     return;
 
@@ -918,9 +972,7 @@ _shell_app_add_window (ShellApp        *app,
   g_signal_connect (window, "unmanaged", G_CALLBACK(shell_app_on_unmanaged), app);
   g_signal_connect (window, "notify::user-time", G_CALLBACK(shell_app_on_user_time_changed), app);
 
-  user_time = meta_window_get_user_time (window);
-  if (user_time > app->running_state->last_user_time)
-    app->running_state->last_user_time = user_time;
+  setup_running_state (app, window);
 
   if (app->state != SHELL_APP_STATE_STARTING)
     shell_app_state_transition (app, SHELL_APP_STATE_RUNNING);
@@ -1081,6 +1133,7 @@ shell_app_launch (ShellApp     *app,
   gboolean ret;
   ShellGlobal *global;
   MetaScreen *screen;
+  GdkDisplay *gdisplay;
 
   if (startup_id)
     *startup_id = NULL;
@@ -1099,6 +1152,7 @@ shell_app_launch (ShellApp     *app,
 
   global = shell_global_get ();
   screen = shell_global_get_screen (global);
+  gdisplay = gdk_screen_get_display (shell_global_get_gdk_screen (global));
 
   if (timestamp == 0)
     timestamp = shell_global_get_current_time (global);
@@ -1106,7 +1160,7 @@ shell_app_launch (ShellApp     *app,
   if (workspace < 0)
     workspace = meta_screen_get_active_workspace_index (screen);
 
-  context = gdk_app_launch_context_new ();
+  context = gdk_display_get_app_launch_context (gdisplay);
   gdk_app_launch_context_set_timestamp (context, timestamp);
   gdk_app_launch_context_set_desktop (context, workspace);
 
@@ -1160,6 +1214,47 @@ create_running_state (ShellApp *app)
   app->running_state->refcount = 1;
   app->running_state->workspace_switch_id =
     g_signal_connect (screen, "workspace-switched", G_CALLBACK(shell_app_on_ws_switch), app);
+
+  app->running_state->muxer = g_action_muxer_new ();
+}
+
+static void
+setup_running_state (ShellApp   *app,
+                     MetaWindow *window)
+{
+  /* We assume that 'gtk-unique-bus-name', gtk-application-object-path'
+   * and 'gtk-app-menu-object-path' are the same for all windows which
+   * have it set.
+   *
+   * It could be possible, however, that the first window we see
+   * belonging to the app didn't have them set.  For this reason, we
+   * take the values from the first window that has them set and ignore
+   * all the rest (until the app is stopped and restarted).
+   */
+
+  if (app->running_state->remote_menu == NULL)
+    {
+      const gchar *application_object_path;
+      const gchar *app_menu_object_path;
+      const gchar *unique_bus_name;
+      GDBusConnection *session;
+      GDBusActionGroup *actions;
+
+      application_object_path = meta_window_get_gtk_application_object_path (window);
+      app_menu_object_path = meta_window_get_gtk_app_menu_object_path (window);
+      unique_bus_name = meta_window_get_gtk_unique_bus_name (window);
+
+      if (application_object_path == NULL || app_menu_object_path == NULL || unique_bus_name == NULL)
+        return;
+
+      session = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, NULL);
+      g_assert (session != NULL);
+      app->running_state->remote_menu = g_dbus_menu_model_get (session, unique_bus_name, app_menu_object_path);
+      actions = g_dbus_action_group_get (session, unique_bus_name, application_object_path);
+      g_action_muxer_insert (app->running_state->muxer, "app", G_ACTION_GROUP (actions));
+      g_object_unref (actions);
+      g_object_unref (session);
+    }
 }
 
 static void
@@ -1167,13 +1262,18 @@ unref_running_state (ShellAppRunningState *state)
 {
   MetaScreen *screen;
 
+  g_assert (state->refcount > 0);
+
   state->refcount--;
   if (state->refcount > 0)
     return;
 
   screen = shell_global_get_screen (shell_global_get ());
-
   g_signal_handler_disconnect (screen, state->workspace_switch_id);
+
+  g_clear_object (&state->remote_menu);
+  g_clear_object (&state->muxer);
+
   g_slice_free (ShellAppRunningState, state);
 }
 
@@ -1202,6 +1302,7 @@ shell_app_init_search_data (ShellApp *app)
   const char *name;
   const char *exec;
   const char *comment;
+  const char * const *keywords;
   char *normalized_exec;
   GDesktopAppInfo *appinfo;
 
@@ -1216,16 +1317,36 @@ shell_app_init_search_data (ShellApp *app)
   normalized_exec = shell_util_normalize_and_casefold (exec);
   app->casefolded_exec = trim_exec_line (normalized_exec);
   g_free (normalized_exec);
+
+  keywords = g_desktop_app_info_get_keywords (appinfo);
+
+  if (keywords)
+    {
+      int i;
+
+      app->casefolded_keywords = g_new0 (char*, g_strv_length ((char **)keywords) + 1);
+
+      i = 0;
+      while (keywords[i])
+        {
+          app->casefolded_keywords[i] = shell_util_normalize_and_casefold (keywords[i]);
+          ++i;
+        }
+      app->casefolded_keywords[i] = NULL;
+    }
+  else
+    app->casefolded_keywords = NULL;
 }
 
 /**
  * shell_app_compare_by_name:
- * @app:
- * @other:
+ * @app: One app
+ * @other: The other app
  *
  * Order two applications by name.
  *
- * Returns: -1, 0, or 1; suitable for use as a comparison function for e.g. g_slist_sort()
+ * Returns: -1, 0, or 1; suitable for use as a comparison function
+ * for e.g. g_slist_sort()
  */
 int
 shell_app_compare_by_name (ShellApp *app, ShellApp *other)
@@ -1281,6 +1402,23 @@ _shell_app_match_search_terms (ShellApp  *app,
           p = strstr (app->casefolded_description, term);
           if (p != NULL)
             current_match = MATCH_SUBSTRING;
+        }
+
+      if (app->casefolded_keywords)
+        {
+          int i = 0;
+          while (app->casefolded_keywords[i] && current_match < MATCH_PREFIX)
+            {
+              p = strstr (app->casefolded_keywords[i], term);
+              if (p != NULL)
+                {
+                  if (p == app->casefolded_keywords[i])
+                    current_match = MATCH_PREFIX;
+                  else
+                    current_match = MATCH_SUBSTRING;
+                }
+              ++i;
+            }
         }
 
       if (current_match == MATCH_NONE)
@@ -1348,6 +1486,9 @@ shell_app_dispose (GObject *object)
       while (app->running_state->windows)
         _shell_app_remove_window (app, app->running_state->windows->data);
     }
+  /* We should have been transitioned when we removed all of our windows */
+  g_assert (app->state == SHELL_APP_STATE_STOPPED);
+  g_assert (app->running_state == NULL);
 
   G_OBJECT_CLASS(shell_app_parent_class)->dispose (object);
 }
@@ -1363,6 +1504,7 @@ shell_app_finalize (GObject *object)
   g_free (app->name_collation_key);
   g_free (app->casefolded_description);
   g_free (app->casefolded_exec);
+  g_strfreev (app->casefolded_keywords);
 
   G_OBJECT_CLASS(shell_app_parent_class)->finalize (object);
 }
@@ -1380,8 +1522,7 @@ shell_app_class_init(ShellAppClass *klass)
                                      SHELL_TYPE_APP,
                                      G_SIGNAL_RUN_LAST,
                                      0,
-                                     NULL, NULL,
-                                     g_cclosure_marshal_VOID__VOID,
+                                     NULL, NULL, NULL,
                                      G_TYPE_NONE, 0);
 
   /**
@@ -1398,4 +1539,46 @@ shell_app_class_init(ShellAppClass *klass)
                                                       SHELL_TYPE_APP_STATE,
                                                       SHELL_APP_STATE_STOPPED,
                                                       G_PARAM_READABLE));
+
+  /**
+   * ShellApp:id:
+   *
+   * The id of this application (a desktop filename, or a special string
+   * like window:0xabcd1234)
+   */
+  g_object_class_install_property (gobject_class,
+                                   PROP_ID,
+                                   g_param_spec_string ("id",
+                                                        "Application id",
+                                                        "The desktop file id of this ShellApp",
+                                                        NULL,
+                                                        G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * ShellApp:action-group:
+   *
+   * The #GDBusActionGroup associated with this ShellApp, if any. See the
+   * documentation of #GApplication and #GActionGroup for details.
+   */
+  g_object_class_install_property (gobject_class,
+                                   PROP_ACTION_GROUP,
+                                   g_param_spec_object ("action-group",
+                                                        "Application Action Group",
+                                                        "The action group exported by the remote application",
+                                                        G_TYPE_ACTION_GROUP,
+                                                        G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+  /**
+   * ShellApp:menu:
+   *
+   * The #GMenuProxy associated with this ShellApp, if any. See the
+   * documentation of #GMenuModel for details.
+   */
+  g_object_class_install_property (gobject_class,
+                                   PROP_MENU,
+                                   g_param_spec_object ("menu",
+                                                        "Application Menu",
+                                                        "The primary menu exported by the remote application",
+                                                        G_TYPE_MENU_MODEL,
+                                                        G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
 }

@@ -421,7 +421,7 @@ StTooltip StLabel { /*Controls the tooltips. Oh really, Einstein!*/
     background-gradient-end: rgba(255,255,255,0.2);
 	border: 1px solid rgba(0,0,0,0.2);
     box-shadow: inset 1px 0px 0px 0px rgba(255,255,255,0.2);
-	border-radius: 0px 4px 0px 4px;
+	border-radius: 0px 4px 4px 0px;
     border-right:none
 }
 
@@ -647,21 +647,13 @@ StTooltip StLabel { /*Controls the tooltips. Oh really, Einstein!*/
 /* Apps */
 
 .icon-grid {
-    spacing: 5px;
-    -shell-grid-item-size: 96px;
+spacing: 16px; /* 36px */
+-shell-grid-horizontal-item-size: 96px; /* 118px */
+-shell-grid-vertical-item-size: 96px; /* 118px */
 }
 
 .icon-grid .overview-icon {
-    icon-size: 48px;
-}
-
-.icon-grid .overview-icon-bin {
-	spacing: 12px;
-}
-
-.icon-grid .overview-icon-label {
-	spacing: 12px;
-	height: 48px;
+    icon-size: 80px;
 }
 
 .contact-grid {

@@ -118,3 +118,6 @@
 
 /* Version number of package */
 #undef VERSION
+
+/* systemd support */
+#undef WITH_SYSTEMD

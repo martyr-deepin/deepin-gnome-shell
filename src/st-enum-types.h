@@ -47,9 +47,8 @@ GType st_align_get_type (void) G_GNUC_CONST;
 GType st_icon_type_get_type (void) G_GNUC_CONST;
 #define ST_TYPE_ICON_TYPE (st_icon_type_get_type())
 
-/* enumerations from "./st/st-widget.h" */
-GType st_text_direction_get_type (void) G_GNUC_CONST;
-#define ST_TYPE_TEXT_DIRECTION (st_text_direction_get_type())
+GType st_background_size_get_type (void) G_GNUC_CONST;
+#define ST_TYPE_BACKGROUND_SIZE (st_background_size_get_type())
 
 G_END_DECLS
 

@@ -172,13 +172,11 @@ st_label_allocate (ClutterActor          *actor,
 {
   StLabelPrivate *priv = ST_LABEL (actor)->priv;
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
-  ClutterActorClass *parent_class;
   ClutterActorBox content_box;
 
-  st_theme_node_get_content_box (theme_node, box, &content_box);
+  clutter_actor_set_allocation (actor, box, flags);
 
-  parent_class = CLUTTER_ACTOR_CLASS (st_label_parent_class);
-  parent_class->allocate (actor, box, flags);
+  st_theme_node_get_content_box (theme_node, box, &content_box);
 
   clutter_actor_allocate (priv->label, &content_box, flags);
 }
@@ -207,12 +205,10 @@ static void
 st_label_paint (ClutterActor *actor)
 {
   StLabelPrivate *priv = ST_LABEL (actor)->priv;
-  ClutterActorClass *parent_class;
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
   StShadow *shadow_spec = st_theme_node_get_text_shadow (theme_node);
 
-  parent_class = CLUTTER_ACTOR_CLASS (st_label_parent_class);
-  parent_class->paint (actor);
+  st_widget_paint_background (ST_WIDGET (actor));
 
   if (shadow_spec)
     {
@@ -254,26 +250,6 @@ st_label_paint (ClutterActor *actor)
 }
 
 static void
-st_label_map (ClutterActor *actor)
-{
-  StLabelPrivate *priv = ST_LABEL (actor)->priv;
-
-  CLUTTER_ACTOR_CLASS (st_label_parent_class)->map (actor);
-
-  clutter_actor_map (priv->label);
-}
-
-static void
-st_label_unmap (ClutterActor *actor)
-{
-  StLabelPrivate *priv = ST_LABEL (actor)->priv;
-
-  CLUTTER_ACTOR_CLASS (st_label_parent_class)->unmap (actor);
-
-  clutter_actor_unmap (priv->label);
-}
-
-static void
 st_label_class_init (StLabelClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
@@ -291,8 +267,6 @@ st_label_class_init (StLabelClass *klass)
   actor_class->allocate = st_label_allocate;
   actor_class->get_preferred_width = st_label_get_preferred_width;
   actor_class->get_preferred_height = st_label_get_preferred_height;
-  actor_class->map = st_label_map;
-  actor_class->unmap = st_label_unmap;
 
   widget_class->style_changed = st_label_style_changed;
   widget_class->get_accessible_type = st_label_accessible_get_type;
@@ -326,7 +300,7 @@ st_label_init (StLabel *label)
   label->priv->shadow_width = -1.;
   label->priv->shadow_height = -1.;
 
-  clutter_actor_set_parent (priv->label, CLUTTER_ACTOR (label));
+  clutter_actor_add_child (CLUTTER_ACTOR (label), priv->label);
 }
 
 /**
@@ -482,10 +456,22 @@ st_label_accessible_init (StLabelAccessible *self)
 }
 
 static void
+label_text_notify_cb (StLabel    *label,
+                      GParamSpec *pspec,
+                      AtkObject  *accessible)
+{
+  g_object_notify (G_OBJECT (accessible), "accessible-name");
+}
+
+static void
 st_label_accessible_initialize (AtkObject *obj,
                                 gpointer   data)
 {
   ATK_OBJECT_CLASS (st_label_accessible_parent_class)->initialize (obj, data);
+
+  g_signal_connect (data, "notify::text",
+                    G_CALLBACK (label_text_notify_cb),
+                    obj);
 
   obj->role = ATK_ROLE_LABEL;
 }

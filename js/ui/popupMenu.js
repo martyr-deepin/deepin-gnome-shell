@@ -2,11 +2,14 @@
 
 const Cairo = imports.cairo;
 const Clutter = imports.gi.Clutter;
+const GLib = imports.gi.GLib;
 const Gtk = imports.gi.Gtk;
+const Gio = imports.gi.Gio;
 const Lang = imports.lang;
 const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 
 const BoxPointer = imports.ui.boxpointer;
 const Main = imports.ui.main;
@@ -26,11 +29,9 @@ function _ensureStyle(actor) {
         actor.ensure_style();
 }
 
-function PopupBaseMenuItem(params) {
-    this._init(params);
-}
+const PopupBaseMenuItem = new Lang.Class({
+    Name: 'PopupBaseMenuItem',
 
-PopupBaseMenuItem.prototype = {
     _init: function (params) {
         params = Params.parse (params, { reactive: true,
                                          activate: true,
@@ -41,7 +42,8 @@ PopupBaseMenuItem.prototype = {
         this.actor = new Shell.GenericContainer({ style_class: 'popup-menu-item',
                                                   reactive: params.reactive,
                                                   track_hover: params.reactive,
-                                                  can_focus: params.reactive });
+                                                  can_focus: params.reactive,
+                                                  accessible_role: Atk.Role.MENU_ITEM});
         this.actor.connect('get-preferred-width', Lang.bind(this, this._getPreferredWidth));
         this.actor.connect('get-preferred-height', Lang.bind(this, this._getPreferredHeight));
         this.actor.connect('allocate', Lang.bind(this, this._allocate));
@@ -108,14 +110,16 @@ PopupBaseMenuItem.prototype = {
         this.emit('activate', event);
     },
 
-    setActive: function (active) {
+    setActive: function (active, params) {
         let activeChanged = active != this.active;
+        params = Params.parse (params, { grabKeyboard: true });
 
         if (activeChanged) {
             this.active = active;
             if (active) {
                 this.actor.add_style_pseudo_class('active');
-                this.actor.grab_key_focus();
+                if (params.grabKeyboard)
+                    this.actor.grab_key_focus();
             } else
                 this.actor.remove_style_pseudo_class('active');
             this.emit('active-changed', active);
@@ -271,7 +275,7 @@ PopupBaseMenuItem.prototype = {
 
     _allocate: function(actor, box, flags) {
         let height = box.y2 - box.y1;
-        let direction = this.actor.get_direction();
+        let direction = this.actor.get_text_direction();
 
         if (this._dot) {
             // The dot is placed outside box
@@ -281,7 +285,7 @@ PopupBaseMenuItem.prototype = {
             let dotBox = new Clutter.ActorBox();
             let dotWidth = Math.round(box.x1 / 2);
 
-            if (direction == St.TextDirection.LTR) {
+            if (direction == Clutter.TextDirection.LTR) {
                 dotBox.x1 = Math.round(box.x1 / 4);
                 dotBox.x2 = dotBox.x1 + dotWidth;
             } else {
@@ -294,7 +298,7 @@ PopupBaseMenuItem.prototype = {
         }
 
         let x;
-        if (direction == St.TextDirection.LTR)
+        if (direction == Clutter.TextDirection.LTR)
             x = box.x1;
         else
             x = box.x2;
@@ -309,7 +313,7 @@ PopupBaseMenuItem.prototype = {
             let availWidth, extraWidth;
             if (this._columnWidths) {
                 if (child.span == -1) {
-                    if (direction == St.TextDirection.LTR)
+                    if (direction == Clutter.TextDirection.LTR)
                         availWidth = box.x2 - x;
                     else
                         availWidth = x - box.x1;
@@ -321,7 +325,7 @@ PopupBaseMenuItem.prototype = {
                 extraWidth = availWidth - naturalWidth;
             } else {
                 if (child.span == -1) {
-                    if (direction == St.TextDirection.LTR)
+                    if (direction == Clutter.TextDirection.LTR)
                         availWidth = box.x2 - x;
                     else
                         availWidth = x - box.x1;
@@ -331,7 +335,7 @@ PopupBaseMenuItem.prototype = {
                 extraWidth = 0;
             }
 
-            if (direction == St.TextDirection.LTR) {
+            if (direction == Clutter.TextDirection.LTR) {
                 if (child.expand) {
                     childBox.x1 = x;
                     childBox.x2 = x + availWidth;
@@ -369,39 +373,34 @@ PopupBaseMenuItem.prototype = {
 
             child.actor.allocate(childBox, flags);
 
-            if (direction == St.TextDirection.LTR)
+            if (direction == Clutter.TextDirection.LTR)
                 x += availWidth + this._spacing;
             else
                 x -= availWidth + this._spacing;
         }
     }
-};
+});
 Signals.addSignalMethods(PopupBaseMenuItem.prototype);
 
-function PopupMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupMenuItem = new Lang.Class({
+    Name: 'PopupMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function (text, params) {
-        PopupBaseMenuItem.prototype._init.call(this, params);
+        this.parent(params);
 
         this.label = new St.Label({ text: text });
         this.addActor(this.label);
+        this.actor.label_actor = this.label
     }
-};
+});
 
-function PopupSeparatorMenuItem() {
-    this._init();
-}
-
-PopupSeparatorMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupSeparatorMenuItem = new Lang.Class({
+    Name: 'PopupSeparatorMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function () {
-        PopupBaseMenuItem.prototype._init.call(this, { reactive: false });
+        this.parent({ reactive: false });
 
         this._drawingArea = new St.DrawingArea({ style_class: 'popup-separator-menu-item' });
         this.addActor(this._drawingArea, { span: -1, expand: true });
@@ -427,22 +426,19 @@ PopupSeparatorMenuItem.prototype = {
         cr.rectangle(margin, gradientOffset, gradientWidth, gradientHeight);
         cr.fill();
     }
-};
+});
 
 const PopupAlternatingMenuItemState = {
     DEFAULT: 0,
     ALTERNATIVE: 1
 }
 
-function PopupAlternatingMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupAlternatingMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupAlternatingMenuItem = new Lang.Class({
+    Name: 'PopupAlternatingMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function(text, alternateText, params) {
-        PopupBaseMenuItem.prototype._init.call(this, params);
+        this.parent(params);
         this.actor.add_style_class_name('popup-alternating-menu-item');
 
         this._text = text;
@@ -450,6 +446,7 @@ PopupAlternatingMenuItem.prototype = {
         this.label = new St.Label({ text: text });
         this.state = PopupAlternatingMenuItemState.DEFAULT;
         this.addActor(this.label);
+        this.actor.label_actor = this.label;
 
         this.actor.connect('notify::mapped', Lang.bind(this, this._onMapped));
     },
@@ -528,17 +525,14 @@ PopupAlternatingMenuItem.prototype = {
 
         this._updateLabel();
     }
-};
+});
 
-function PopupSliderMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupSliderMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupSliderMenuItem = new Lang.Class({
+    Name: 'PopupSliderMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function(value) {
-        PopupBaseMenuItem.prototype._init.call(this, { activate: false });
+        this.parent({ activate: false });
 
         this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
 
@@ -714,15 +708,14 @@ PopupSliderMenuItem.prototype = {
         }
         return false;
     }
-};
+});
 
-function Switch() {
-    this._init.apply(this, arguments);
-}
+const Switch = new Lang.Class({
+    Name: 'Switch',
 
-Switch.prototype = {
     _init: function(state) {
-        this.actor = new St.Bin({ style_class: 'toggle-switch' });
+        this.actor = new St.Bin({ style_class: 'toggle-switch',
+                                  accessible_role: Atk.Role.CHECK_BOX});
         // Translators: this MUST be either "toggle-switch-us"
         // (for toggle switches containing the English words
         // "ON" and "OFF") or "toggle-switch-intl" (for toggle
@@ -743,20 +736,21 @@ Switch.prototype = {
     toggle: function() {
         this.setToggleState(!this.state);
     }
-};
+});
 
-function PopupSwitchMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupSwitchMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupSwitchMenuItem = new Lang.Class({
+    Name: 'PopupSwitchMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function(text, active, params) {
-        PopupBaseMenuItem.prototype._init.call(this, params);
+        this.parent(params);
 
         this.label = new St.Label({ text: text });
         this._switch = new Switch(active);
+
+        this.actor.accessible_role = Atk.Role.CHECK_MENU_ITEM;
+        this.checkAccessibleState();
+        this.actor.label_actor = this.label;
 
         this.addActor(this.label);
 
@@ -776,11 +770,14 @@ PopupSwitchMenuItem.prototype = {
             this._statusBin.child = this._statusLabel;
             this.actor.reactive = false;
             this.actor.can_focus = false;
+            this.actor.accessible_role = Atk.Role.MENU_ITEM;
         } else {
             this._statusBin.child = this._switch.actor;
             this.actor.reactive = true;
             this.actor.can_focus = true;
+            this.actor.accessible_role = Atk.Role.CHECK_MENU_ITEM;
         }
+        this.checkAccessibleState();
     },
 
     activate: function(event) {
@@ -788,12 +785,19 @@ PopupSwitchMenuItem.prototype = {
             this.toggle();
         }
 
-        PopupBaseMenuItem.prototype.activate.call(this, event);
+        // we allow pressing space to toggle the switch
+        // without closing the menu
+        if (event.type() == Clutter.EventType.KEY_PRESS &&
+            event.get_key_symbol() == Clutter.KEY_space)
+            return;
+
+        this.parent(event);
     },
 
     toggle: function() {
         this._switch.toggle();
         this.emit('toggled', this._switch.state);
+        this.checkAccessibleState();
     },
 
     get state() {
@@ -802,18 +806,29 @@ PopupSwitchMenuItem.prototype = {
 
     setToggleState: function(state) {
         this._switch.setToggleState(state);
+        this.checkAccessibleState();
+    },
+
+    checkAccessibleState: function() {
+        switch (this.actor.accessible_role) {
+        case Atk.Role.CHECK_MENU_ITEM:
+            if (this._switch.state)
+                this.actor.add_accessible_state (Atk.StateType.CHECKED);
+            else
+                this.actor.remove_accessible_state (Atk.StateType.CHECKED);
+            break;
+        default:
+            this.actor.remove_accessible_state (Atk.StateType.CHECKED);
+        }
     }
-};
+});
 
-function PopupImageMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupImageMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupImageMenuItem = new Lang.Class({
+    Name: 'PopupImageMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function (text, iconName, params) {
-        PopupBaseMenuItem.prototype._init.call(this, params);
+        this.parent(params);
 
         this.label = new St.Label({ text: text });
         this.addActor(this.label);
@@ -826,13 +841,12 @@ PopupImageMenuItem.prototype = {
     setIcon: function(name) {
         this._icon.icon_name = name;
     }
-};
+});
 
-function PopupMenuBase() {
-    throw new TypeError('Trying to instantiate abstract class PopupMenuBase');
-}
+const PopupMenuBase = new Lang.Class({
+    Name: 'PopupMenuBase',
+    Abstract: true,
 
-PopupMenuBase.prototype = {
     _init: function(sourceActor, styleClass) {
         this.sourceActor = sourceActor;
 
@@ -886,6 +900,10 @@ PopupMenuBase.prototype = {
                            app.activate();
                        });
         return menuItem;
+    },
+
+    isEmpty: function() {
+        return this.box.get_children().length == 0;
     },
 
     isChildMenu: function(menu) {
@@ -958,7 +976,12 @@ PopupMenuBase.prototype = {
             this.emit('activate', menuItem);
             this.close(true);
         }));
-        menuItem.connect('destroy', Lang.bind(this, function(emitter) {
+        // the weird name is to avoid a conflict with some random property
+        // the menuItem may have, called destroyId
+        // (FIXME: in the future it may make sense to have container objects
+        // like PopupMenuManager does)
+        menuItem._popupMenuDestroyId = menuItem.connect('destroy', Lang.bind(this, function(menuItem) {
+            menuItem.disconnect(menuItem._popupMenuDestroyId);
             menuItem.disconnect(menuItem._activateId);
             menuItem.disconnect(menuItem._activeChangeId);
             menuItem.disconnect(menuItem._sensitiveChangeId);
@@ -1013,12 +1036,19 @@ PopupMenuBase.prototype = {
             let items = this._getMenuItems();
             if (position < items.length) {
                 before_item = items[position].actor;
-                this.box.insert_before(menuItem.actor, before_item);
-            } else
+                this.box.insert_child_below(menuItem.actor, before_item);
+            } else {
                 this.box.add(menuItem.actor);
+            }
         }
+
         if (menuItem instanceof PopupMenuSection) {
             this._connectSubMenuSignals(menuItem, menuItem);
+            menuItem._closingId = this.connect('open-state-changed',
+                function(self, open) {
+                    if (!open)
+                        menuItem.close(false);
+                });
             menuItem.connect('destroy', Lang.bind(this, function() {
                 menuItem.disconnect(menuItem._subMenuActivateId);
                 menuItem.disconnect(menuItem._subMenuActiveChangeId);
@@ -1029,7 +1059,7 @@ PopupMenuBase.prototype = {
             if (before_item == null)
                 this.box.add(menuItem.menu.actor);
             else
-                this.box.insert_before(menuItem.menu.actor, before_item);
+                this.box.insert_child_below(menuItem.menu.actor, before_item);
             this._connectSubMenuSignals(menuItem, menuItem.menu);
             this._connectItemSignals(menuItem);
             menuItem._closingId = this.connect('open-state-changed', function(self, open) {
@@ -1132,18 +1162,15 @@ PopupMenuBase.prototype = {
 
         this.emit('destroy');
     }
-};
+});
 Signals.addSignalMethods(PopupMenuBase.prototype);
 
-function PopupMenu() {
-    this._init.apply(this, arguments);
-}
-
-PopupMenu.prototype = {
-    __proto__: PopupMenuBase.prototype,
+const PopupMenu = new Lang.Class({
+    Name: 'PopupMenu',
+    Extends: PopupMenuBase,
 
     _init: function(sourceActor, arrowAlignment, arrowSide) {
-        PopupMenuBase.prototype._init.call (this, sourceActor, 'popup-menu-content');
+        this.parent(sourceActor, 'popup-menu-content');
 
         this._arrowAlignment = arrowAlignment;
         this._arrowSide = arrowSide;
@@ -1206,6 +1233,9 @@ PopupMenu.prototype = {
         if (this.isOpen)
             return;
 
+        if (this.isEmpty())
+            return;
+
         this.isOpen = true;
 
         this._boxPointer.setPosition(this.sourceActor, this._arrowAlignment);
@@ -1228,17 +1258,14 @@ PopupMenu.prototype = {
         this.isOpen = false;
         this.emit('open-state-changed', false);
     }
-};
+});
 
-function PopupSubMenu() {
-    this._init.apply(this, arguments);
-}
-
-PopupSubMenu.prototype = {
-    __proto__: PopupMenuBase.prototype,
+const PopupSubMenu = new Lang.Class({
+    Name: 'PopupSubMenu',
+    Extends: PopupMenuBase,
 
     _init: function(sourceActor, sourceArrow) {
-        PopupMenuBase.prototype._init.call(this, sourceActor);
+        this.parent(sourceActor);
 
         this._arrow = sourceArrow;
         this._arrow.rotation_center_z_gravity = Clutter.Gravity.CENTER;
@@ -1298,6 +1325,9 @@ PopupSubMenu.prototype = {
 
     open: function(animate) {
         if (this.isOpen)
+            return;
+
+        if (this.isEmpty())
             return;
 
         this.isOpen = true;
@@ -1393,7 +1423,7 @@ PopupSubMenu.prototype = {
 
         return false;
     }
-};
+});
 
 /**
  * PopupMenuSection:
@@ -1403,40 +1433,47 @@ PopupSubMenu.prototype = {
  * can add it to another menu), but is completely transparent
  * to the user
  */
-function PopupMenuSection() {
-    this._init.apply(this, arguments);
-}
-
-PopupMenuSection.prototype = {
-    __proto__: PopupMenuBase.prototype,
+const PopupMenuSection = new Lang.Class({
+    Name: 'PopupMenuSection',
+    Extends: PopupMenuBase,
 
     _init: function() {
-        PopupMenuBase.prototype._init.call(this);
+        this.parent();
 
         this.actor = this.box;
         this.actor._delegate = this;
         this.isOpen = true;
+
+        // an array of externally managed separators
+        this.separators = [];
     },
 
-    // deliberately ignore any attempt to open() or close()
-    open: function(animate) { },
-    close: function() { },
-}
+    // deliberately ignore any attempt to open() or close(), but emit the
+    // corresponding signal so children can still pick it up
+    open: function(animate) { this.emit('open-state-changed', true); },
+    close: function() { this.emit('open-state-changed', false); },
 
-function PopupSubMenuMenuItem() {
-    this._init.apply(this, arguments);
-}
+    destroy: function() {
+        for (let i = 0; i < this.separators.length; i++)
+            this.separators[i].destroy();
+        this.separators = [];
 
-PopupSubMenuMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+        this.parent();
+    }
+});
+
+const PopupSubMenuMenuItem = new Lang.Class({
+    Name: 'PopupSubMenuMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function(text) {
-        PopupBaseMenuItem.prototype._init.call(this);
+        this.parent();
 
         this.actor.add_style_class_name('popup-submenu-menu-item');
 
         this.label = new St.Label({ text: text });
         this.addActor(this.label);
+        this.actor.label_actor = this.label;
         this._triangle = new St.Label({ text: '\u25B8' });
         this.addActor(this._triangle, { align: St.Align.END });
 
@@ -1453,7 +1490,8 @@ PopupSubMenuMenuItem.prototype = {
 
     destroy: function() {
         this.menu.destroy();
-        PopupBaseMenuItem.prototype.destroy.call(this);
+
+        this.parent();
     },
 
     _onKeyPressEvent: function(actor, event) {
@@ -1468,7 +1506,7 @@ PopupSubMenuMenuItem.prototype = {
             return true;
         }
 
-        return PopupBaseMenuItem.prototype._onKeyPressEvent.call(this, actor, event);
+        return this.parent(actor, event);
     },
 
     activate: function(event) {
@@ -1478,22 +1516,21 @@ PopupSubMenuMenuItem.prototype = {
     _onButtonReleaseEvent: function(actor) {
         this.menu.toggle();
     }
-};
+});
 
-function PopupComboMenu() {
-    this._init.apply(this, arguments);
-}
-
-PopupComboMenu.prototype = {
-    __proto__: PopupMenuBase.prototype,
+const PopupComboMenu = new Lang.Class({
+    Name: 'PopupComboMenu',
+    Extends: PopupMenuBase,
 
     _init: function(sourceActor) {
-        PopupMenuBase.prototype._init.call(this,
-                                           sourceActor, 'popup-combo-menu');
+        this.parent(sourceActor, 'popup-combo-menu');
+
         this.actor = this.box;
         this.actor._delegate = this;
         this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
         this.actor.connect('key-focus-in', Lang.bind(this, this._onKeyFocusIn));
+        sourceActor.connect('style-changed',
+                            Lang.bind(this, this._onSourceActorStyleChanged));
         this._activeItemPos = -1;
         global.focus_manager.add_group(this.actor);
     },
@@ -1513,8 +1550,31 @@ PopupComboMenu.prototype = {
         activeItem.actor.grab_key_focus();
     },
 
+    _onSourceActorStyleChanged: function() {
+        // PopupComboBoxMenuItem clones the active item's actors
+        // to work with arbitrary items in the menu; this means
+        // that we need to propagate some style information and
+        // enforce style updates even when the menu is closed
+        let activeItem = this._getMenuItems()[this._activeItemPos];
+        if (this.sourceActor.has_style_pseudo_class('insensitive'))
+            activeItem.actor.add_style_pseudo_class('insensitive');
+        else
+            activeItem.actor.remove_style_pseudo_class('insensitive');
+
+        // To propagate the :active style, we need to make sure that the
+        // internal state of the PopupComboMenu is updated as well, but
+        // we must not move the keyboard grab
+        activeItem.setActive(this.sourceActor.has_style_pseudo_class('active'),
+                             { grabKeyboard: false });
+
+        _ensureStyle(this.actor);
+    },
+
     open: function() {
         if (this.isOpen)
+            return;
+
+        if (this.isEmpty())
             return;
 
         this.isOpen = true;
@@ -1560,6 +1620,10 @@ PopupComboMenu.prototype = {
         this._activeItemPos = position;
     },
 
+    getActiveItem: function() {
+        return this._getMenuItems()[this._activeItemPos];
+    },
+
     setItemVisible: function(position, visible) {
         if (!visible && position == this._activeItemPos) {
             log('Trying to hide the active menu item.');
@@ -1572,17 +1636,16 @@ PopupComboMenu.prototype = {
     getItemVisible: function(position) {
         return this._getMenuItems()[position].actor.visible;
     }
-};
+});
 
-function PopupComboBoxMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-PopupComboBoxMenuItem.prototype = {
-    __proto__: PopupBaseMenuItem.prototype,
+const PopupComboBoxMenuItem = new Lang.Class({
+    Name: 'PopupComboBoxMenuItem',
+    Extends: PopupBaseMenuItem,
 
     _init: function (params) {
-        PopupBaseMenuItem.prototype._init.call(this, params);
+        this.parent(params);
+
+        this.actor.accessible_role = Atk.Role.COMBO_BOX;
 
         this._itemBox = new Shell.Stack();
         this.addActor(this._itemBox);
@@ -1680,6 +1743,11 @@ PopupComboBoxMenuItem.prototype = {
                          Lang.bind(this, this._itemActivated, position));
     },
 
+    checkAccessibleLabel: function() {
+        let activeItem = this._menu.getActiveItem();
+        this.actor.label_actor = activeItem.label;
+    },
+
     setActiveItem: function(position) {
         let item = this._items[position];
         if (!item)
@@ -1690,6 +1758,8 @@ PopupComboBoxMenuItem.prototype = {
         this._activeItemPos = position;
         for (let i = 0; i < this._items.length; i++)
             this._items[i].visible = (i == this._activeItemPos);
+
+        this.checkAccessibleLabel();
     },
 
     setItemVisible: function(position, visible) {
@@ -1700,16 +1770,276 @@ PopupComboBoxMenuItem.prototype = {
         this.setActiveItem(position);
         this.emit('active-item-changed', position);
     }
-};
+});
+
+/**
+ * RemoteMenu:
+ *
+ * A PopupMenu that tracks a GMenuModel and shows its actions
+ * (exposed by GApplication/GActionGroup)
+ */
+const RemoteMenu = new Lang.Class({
+    Name: 'RemoteMenu',
+    Extends: PopupMenu,
+
+    _init: function(sourceActor, model, actionGroup) {
+        this.parent(sourceActor, 0.0, St.Side.TOP);
+
+        this.model = model;
+        this.actionGroup = actionGroup;
+
+        this._actions = { };
+        this._modelChanged(this.model, 0, 0, this.model.get_n_items(), this);
+
+        this._actionStateChangeId = this.actionGroup.connect('action-state-changed', Lang.bind(this, this._actionStateChanged));
+        this._actionEnableChangeId = this.actionGroup.connect('action-enabled-changed', Lang.bind(this, this._actionEnabledChanged));
+    },
+
+    destroy: function() {
+        if (this._actionStateChangeId) {
+            this.actionGroup.disconnect(this._actionStateChangeId);
+            this._actionStateChangeId = 0;
+        }
+
+        if (this._actionEnableChangeId) {
+            this.actionGroup.disconnect(this._actionEnableChangeId);
+            this._actionEnableChangeId = 0;
+        }
+
+        this.parent();
+    },
+
+    _createMenuItem: function(model, index) {
+        let labelValue = model.get_item_attribute_value(index, Gio.MENU_ATTRIBUTE_LABEL, null);
+        let label = labelValue ? labelValue.deep_unpack() : '';
+        // remove all underscores that are not followed by another underscore
+        label = label.replace(/_([^_])/, '$1');
+
+        let section_link = model.get_item_link(index, Gio.MENU_LINK_SECTION);
+        if (section_link) {
+            let item = new PopupMenuSection();
+            if (label) {
+                let title = new PopupMenuItem(label, { reactive: false,
+                                                       style_class: 'popup-subtitle-menu-item' });
+                item._titleMenuItem = title;
+                title._ignored = true;
+                item.addMenuItem(title);
+            }
+            this._modelChanged(section_link, 0, 0, section_link.get_n_items(), item);
+            return [item, true, ''];
+        }
+
+        let submenu_link = model.get_item_link(index, Gio.MENU_LINK_SUBMENU);
+
+        if (submenu_link) {
+            let item = new PopupSubMenuMenuItem(label);
+            this._modelChanged(submenu_link, 0, 0, submenu_link.get_n_items(), item.menu);
+            return [item, false, ''];
+        }
+
+        let action_id = model.get_item_attribute_value(index, Gio.MENU_ATTRIBUTE_ACTION, null).deep_unpack();
+        if (!this.actionGroup.has_action(action_id)) {
+            // the action may not be there yet, wait for action-added
+            return [null, false, 'action-added'];
+        }
+
+        if (!this._actions[action_id])
+            this._actions[action_id] = { enabled: this.actionGroup.get_action_enabled(action_id),
+                                         state: this.actionGroup.get_action_state(action_id),
+                                         items: [ ],
+                                       };
+        let action = this._actions[action_id];
+        let item, target, destroyId, specificSignalId;
+
+        if (action.state) {
+            // Docs have get_state_hint(), except that the DBus protocol
+            // has no provision for it (so ShellApp does not implement it,
+            // and neither GApplication), and g_action_get_state_hint()
+            // always returns null
+            // Funny :)
+
+            switch (String.fromCharCode(action.state.classify())) {
+            case 'b':
+                item = new PopupSwitchMenuItem(label, action.state.get_boolean());
+                action.items.push(item);
+                specificSignalId = item.connect('toggled', Lang.bind(this, function(item) {
+                    this.actionGroup.activate_action(action_id, null);
+                }));
+                break;
+            case 's':
+                item = new PopupMenuItem(label);
+                item._remoteTarget = model.get_item_attribute_value(index, Gio.MENU_ATTRIBUTE_TARGET, null).deep_unpack();
+                action.items.push(item);
+                item.setShowDot(action.state.deep_unpack() == item._remoteTarget);
+                specificSignalId = item.connect('activate', Lang.bind(this, function(item) {
+                    this.actionGroup.activate_action(action_id, GLib.Variant.new_string(item._remoteTarget));
+                }));
+                break;
+            default:
+                log('Action "%s" has state of type %s, which is not supported'.format(action_id, action.state.get_type_string()));
+                return [null, false, 'action-state-changed'];
+            }
+        } else {
+            target = model.get_item_attribute_value(index, Gio.MENU_ATTRIBUTE_TARGET, null);
+            item = new PopupMenuItem(label);
+            action.items.push(item);
+            specificSignalId = item.connect('activate', Lang.bind(this, function() {
+                this.actionGroup.activate_action(action_id, target);
+            }));
+        }
+
+        item.actor.reactive = item.actor.can_focus = action.enabled;
+        if (action.enabled)
+            item.actor.remove_style_pseudo_class('insensitive');
+        else
+            item.actor.add_style_pseudo_class('insensitive');
+
+        destroyId = item.connect('destroy', Lang.bind(this, function() {
+            item.disconnect(destroyId);
+            item.disconnect(specificSignalId);
+
+            let pos = action.items.indexOf(item);
+            if (pos != -1)
+                action.items.splice(pos, 1);
+        }));
+
+        return [item, false, ''];
+    }, 
+
+    _modelChanged: function(model, position, removed, added, target) {
+        let j, k;
+        let j0, k0;
+
+        let currentItems = target._getMenuItems();
+
+        k0 = 0;
+        // skip ignored items at the beginning
+        while (k0 < currentItems.length && currentItems[k0]._ignored)
+            k0++;
+        // find the right menu item matching the model item
+        for (j0 = 0; j0 < position; j0++, k0++) {
+            if (currentItems[k0]._ignored)
+                k0++;
+        }
+
+        if (removed == -1) {
+            // special flag to indicate we should destroy everything
+            for (k = k0; k < currentItems.length; k++)
+                currentItems[k].destroy();
+        } else {
+            for (j = j0, k = k0; j < j0 + removed; j++, k++) {
+                currentItems[k].destroy();
+
+                if (currentItems[k]._ignored)
+                    j--;
+            }
+        }
+
+        for (j = j0, k = k0; j < j0 + added; j++, k++) {
+            let [item, addSeparator, changeSignal] = this._createMenuItem(model, j);
+
+            if (item) {
+                // separators must be added in the parent to make autohiding work
+                if (addSeparator) {
+                    let separator = new PopupSeparatorMenuItem();
+                    item.separators.push(separator);
+                    separator._ignored = true;
+                    target.addMenuItem(separator, k+1);
+                    k++;
+                }
+
+                target.addMenuItem(item, k);
+
+                if (addSeparator) {
+                    let separator = new PopupSeparatorMenuItem();
+                    item.separators.push(separator);
+                    separator._ignored = true;
+                    target.addMenuItem(separator, k+1);
+                    k++;
+                }
+            } else if (changeSignal) {
+                let signalId = this.actionGroup.connect(changeSignal, Lang.bind(this, function() {
+                    this.actionGroup.disconnect(signalId);
+
+                    // force a full update
+                    this._modelChanged(model, 0, -1, model.get_n_items(), target);
+                }));
+            }
+        }
+
+        if (!model._changedId) {
+            model._changedId = model.connect('items-changed', Lang.bind(this, this._modelChanged, target));
+            model._destroyId = target.connect('destroy', function() {
+                if (model._changedId)
+                    model.disconnect(model._changedId);
+                if (model._destroyId)
+                    target.disconnect(model._destroyId);
+                model._changedId = 0;
+                model._destroyId = 0;
+            });
+        }
+
+        if (target instanceof PopupMenuSection) {
+            if (target._titleMenuItem)
+                target.actor.visible = target.numMenuItems != 1;
+            else
+                target.actor.visible = target.numMenuItems != 0;
+        } else {
+            let sourceItem = target.sourceActor._delegate;
+            if (sourceItem instanceof PopupSubMenuMenuItem)
+                sourceItem.actor.visible = target.numMenuItems != 0;
+        }
+    },
+
+    _actionStateChanged: function(actionGroup, action_id) {
+        let action = this._actions[action_id];
+        if (!action)
+            return;
+
+        action.state = actionGroup.get_action_state(action_id);
+        if (action.items.length) {
+            switch (String.fromCharCode(action.state.classify())) {
+            case 'b':
+                for (let i = 0; i < action.items.length; i++)
+                    action.items[i].setToggleState(action.state.get_boolean());
+                break;
+            case 'd':
+                for (let i = 0; i < action.items.length; i++)
+                    action.items[i].setValue(action.state.get_double());
+                break;
+            case 's':
+                for (let i = 0; i < action.items.length; i++)
+                    action.items[i].setShowDot(action.items[i]._remoteTarget == action.state.deep_unpack());
+            }
+        }
+    },
+
+    _actionEnabledChanged: function(actionGroup, action_id) {
+        let action = this._actions[action_id];
+        if (!action)
+            return;
+
+        action.enabled = actionGroup.get_action_enabled(action_id);
+        if (action.items.length) {
+            for (let i = 0; i < action.items.length; i++) {
+                let item = action.items[i];
+                item.actor.reactive = item.actor.can_focus = action.enabled;
+
+                if (action.enabled)
+                    item.actor.remove_style_pseudo_class('insensitive');
+                else
+                    item.actor.add_style_pseudo_class('insensitive');
+            }
+        }
+    }
+});
 
 /* Basic implementation of a menu manager.
  * Call addMenu to add menus
  */
-function PopupMenuManager(owner) {
-    this._init(owner);
-}
+const PopupMenuManager = new Lang.Class({
+    Name: 'PopupMenuManager',
 
-PopupMenuManager.prototype = {
     _init: function(owner) {
         this._owner = owner;
         this.grabbed = false;
@@ -1981,4 +2311,4 @@ PopupMenuManager.prototype = {
         if (this._activeMenu != null)
             this._activeMenu.close(true);
     }
-};
+});

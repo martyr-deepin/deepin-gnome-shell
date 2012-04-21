@@ -6,11 +6,9 @@ const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 const DND = imports.ui.dnd;
 
-function XdndHandler() {
-    this._init();
-}
+const XdndHandler = new Lang.Class({
+    Name: 'XdndHandler',
 
-XdndHandler.prototype = {
     _init: function() {
         // Used to display a clone of the cursor window when the
         // window group is hidden (like it happens in the overview)
@@ -19,6 +17,7 @@ XdndHandler.prototype = {
         // Used as a drag actor in case we don't have a cursor window clone
         this._dummy = new Clutter.Rectangle({ width: 1, height: 1, opacity: 0 });
         global.stage.add_actor(this._dummy);
+        Shell.util_set_hidden_from_pick(this._dummy, true);
         this._dummy.hide();
 
         // Mutter delays the creation of the output window as long
@@ -114,10 +113,11 @@ XdndHandler.prototype = {
 
         while (pickedActor) {
                 if (pickedActor._delegate && pickedActor._delegate.handleDragOver) {
+                    let [r, targX, targY] = pickedActor.transform_stage_point(x, y);
                     let result = pickedActor._delegate.handleDragOver(this,
                                                                       dragEvent.dragActor,
-                                                                      x,
-                                                                      y,
+                                                                      targX,
+                                                                      targY,
                                                                       global.get_current_time());
                     if (result != DND.DragMotionResult.CONTINUE)
                         return;
@@ -125,6 +125,6 @@ XdndHandler.prototype = {
                 pickedActor = pickedActor.get_parent();
         }
     }
-}
+});
 
 Signals.addSignalMethods(XdndHandler.prototype);

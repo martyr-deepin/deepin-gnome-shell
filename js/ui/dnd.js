@@ -69,11 +69,9 @@ function removeDragMonitor(monitor) {
         }
 }
 
-function _Draggable(actor, params) {
-    this._init(actor, params);
-}
+const _Draggable = new Lang.Class({
+    Name: 'Draggable',
 
-_Draggable.prototype = {
     _init : function(actor, params) {
         params = Params.parse(params, { manualMode: false,
                                         restoreOnSuccess: false,
@@ -105,8 +103,8 @@ _Draggable.prototype = {
         this._dragInProgress = false; // The drag has been started, and has not been dropped or cancelled yet.
         this._animationInProgress = false; // The drag is over and the item is in the process of animating to its original position (snapping back or reverting).
 
-        // During the drag, we eat enter/leave events so that actors don't prelight or show
-        // tooltips. But we remember the actors that we first left/last entered so we can
+        // During the drag, we eat enter/leave events so that actors don't prelight.
+        // But we remember the actors that we first left/last entered so we can
         // fix up the hover state after the drag ends.
         this._firstLeaveActor = null;
         this._lastEnterActor = null;
@@ -122,28 +120,13 @@ _Draggable.prototype = {
             return false;
 
         this._buttonDown = true;
-        // special case St.Button: grabbing the pointer would mess up the
-        // internal state, so we start the drag manually on hover change
-        if (this.actor instanceof St.Button)
-            this.actor.connect('notify::hover',
-                               Lang.bind(this, this._onButtonHoverChanged));
-        else
-            this._grabActor();
+        this._grabActor();
 
         let [stageX, stageY] = event.get_coords();
         this._dragStartX = stageX;
         this._dragStartY = stageY;
 
         return false;
-    },
-
-    _onButtonHoverChanged: function(button) {
-        if (button.hover || !button.pressed)
-            return;
-
-        button.fake_release();
-        this.startDrag(this._dragStartX, this._dragStartY,
-                       global.get_current_time());
     },
 
     _grabActor: function() {
@@ -233,6 +216,13 @@ _Draggable.prototype = {
     startDrag: function (stageX, stageY, time) {
         currentDraggable = this;
         this._dragInProgress = true;
+
+        // Special-case St.Button: the pointer grab messes with the internal
+        // state, so force a reset to a reasonable state here
+        if (this.actor instanceof St.Button) {
+            this.actor.fake_release();
+            this.actor.hover = false;
+        }
 
         this.emit('drag-begin', time);
         if (this._onEventId)
@@ -596,7 +586,7 @@ _Draggable.prototype = {
         this._dragActor = undefined;
         currentDraggable = null;
     }
-};
+});
 
 Signals.addSignalMethods(_Draggable.prototype);
 

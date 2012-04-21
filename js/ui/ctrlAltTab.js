@@ -22,11 +22,9 @@ const SortGroup = {
     BOTTOM: 2
 };
 
-function CtrlAltTabManager() {
-    this._init();
-}
+const CtrlAltTabManager = new Lang.Class({
+    Name: 'CtrlAltTabManager',
 
-CtrlAltTabManager.prototype = {
     _init: function() {
         this._items = [];
         this._focusManager = St.FocusManager.get_for_stage(global.stage);
@@ -134,17 +132,15 @@ CtrlAltTabManager.prototype = {
                                       }));
         }
     }
-};
+});
 
 function mod(a, b) {
     return (a + b) % b;
 }
 
-function CtrlAltTabPopup() {
-    this._init();
-}
+const CtrlAltTabPopup = new Lang.Class({
+    Name: 'CtrlAltTabPopup',
 
-CtrlAltTabPopup.prototype = {
     _init : function() {
         this.actor = new Shell.GenericContainer({ name: 'ctrlAltTabPopup',
                                                   reactive: true });
@@ -187,7 +183,7 @@ CtrlAltTabPopup.prototype = {
         let [childMinHeight, childNaturalHeight] = this._switcher.actor.get_preferred_height(primary.width - hPadding);
         let [childMinWidth, childNaturalWidth] = this._switcher.actor.get_preferred_width(childNaturalHeight);
         childBox.x1 = Math.max(primary.x + leftPadding, primary.x + Math.floor((primary.width - childNaturalWidth) / 2));
-        childBox.x2 = Math.min(primary.width - hPadding, childBox.x1 + childNaturalWidth);
+        childBox.x2 = Math.min(primary.x + primary.width - hPadding, childBox.x1 + childNaturalWidth);
         childBox.y1 = primary.y + Math.floor((primary.height - childNaturalHeight) / 2);
         childBox.y2 = childBox.y1 + childNaturalHeight;
         this._switcher.actor.allocate(childBox, flags);
@@ -237,7 +233,7 @@ CtrlAltTabPopup.prototype = {
 
     _keyPressEvent : function(actor, event) {
         let keysym = event.get_key_symbol();
-        let shift = (Shell.get_event_state(event) & Clutter.ModifierType.SHIFT_MASK);
+        let shift = (event.get_state() & Clutter.ModifierType.SHIFT_MASK);
         if (shift && keysym == Clutter.KEY_Tab)
             keysym = Clutter.ISO_Left_Tab;
 
@@ -303,17 +299,14 @@ CtrlAltTabPopup.prototype = {
         this._selection = num;
         this._switcher.highlight(num);
     }
-};
+});
 
-function CtrlAltTabSwitcher(items) {
-    this._init(items);
-}
-
-CtrlAltTabSwitcher.prototype = {
-    __proto__ : AltTab.SwitcherList.prototype,
+const CtrlAltTabSwitcher = new Lang.Class({
+    Name: 'CtrlAltTabSwitcher',
+    Extends: AltTab.SwitcherList,
 
     _init : function(items) {
-        AltTab.SwitcherList.prototype._init.call(this, true);
+        this.parent(true);
 
         for (let i = 0; i < items.length; i++)
             this._addIcon(items[i]);
@@ -336,4 +329,4 @@ CtrlAltTabSwitcher.prototype = {
 
         this.addItem(box, text);
     }
-};
+});

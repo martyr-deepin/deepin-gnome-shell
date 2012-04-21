@@ -10,7 +10,6 @@
 
 #include <clutter/clutter.h>
 #include <clutter/x11/clutter-x11.h>
-#include <dbus/dbus-glib.h>
 #include <gdk/gdk.h>
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
@@ -33,361 +32,146 @@ extern GType gnome_shell_plugin_get_type (void);
 #define SHELL_DBUS_SERVICE "org.gnome.Shell"
 #define MAGNIFIER_DBUS_SERVICE "org.gnome.Magnifier"
 
+#define OVERRIDES_SCHEMA "org.gnome.shell.overrides"
+
 static gboolean is_gdm_mode = FALSE;
+
+#define DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER 1
+#define DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER 4
+
+static void
+shell_dbus_acquire_name (GDBusProxy *bus,
+                         guint32     request_name_flags,
+                         guint32    *request_name_result,
+                         gchar      *name,
+                         gboolean    fatal)
+{
+  GError *error = NULL;
+  GVariant *request_name_variant;
+
+  if (!(request_name_variant = g_dbus_proxy_call_sync (bus,
+                                                       "RequestName",
+                                                       g_variant_new ("(su)", name, request_name_flags),
+                                                       0, /* call flags */
+                                                       -1, /* timeout */
+                                                       NULL, /* cancellable */
+                                                       &error)))
+    {
+      g_printerr ("failed to acquire %s: %s\n", name, error->message);
+      if (!fatal)
+        return;
+      exit (1);
+    }
+  g_variant_get (request_name_variant, "(u)", request_name_result);
+}
+
+static void
+shell_dbus_acquire_names (GDBusProxy *bus,
+                          guint32     request_name_flags,
+                          gchar      *name,
+                          gboolean    fatal, ...) G_GNUC_NULL_TERMINATED;
+
+static void
+shell_dbus_acquire_names (GDBusProxy *bus,
+                          guint32     request_name_flags,
+                          gchar      *name,
+                          gboolean    fatal, ...)
+{
+  va_list al;
+  guint32 request_name_result;
+  va_start (al, fatal);
+  for (;;)
+  {
+    shell_dbus_acquire_name (bus,
+                             request_name_flags,
+                             &request_name_result,
+                             name, fatal);
+    name = va_arg (al, gchar *);
+    if (!name)
+      break;
+    fatal = va_arg (al, gboolean);
+  }
+  va_end (al);
+}
 
 static void
 shell_dbus_init (gboolean replace)
 {
+  GDBusConnection *session;
+  GDBusProxy *bus;
   GError *error = NULL;
-  DBusGConnection *session;
-  DBusGProxy *bus;
   guint32 request_name_flags;
   guint32 request_name_result;
 
-  /** TODO:
-   * In the future we should use GDBus for this.  However, in
-   * order to do that, we need to port all of the JavaScript
-   * code.  Otherwise, the name will be claimed on the wrong
-   * connection.
-   */
-  session = dbus_g_bus_get (DBUS_BUS_SESSION, NULL);
+  session = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
 
-  bus = dbus_g_proxy_new_for_name (session,
-                                   DBUS_SERVICE_DBUS,
-                                   DBUS_PATH_DBUS,
-                                   DBUS_INTERFACE_DBUS);
+  if (error) {
+    g_printerr ("Failed to connect to session bus: %s", error->message);
+    exit (1);
+  }
 
-  request_name_flags = DBUS_NAME_FLAG_DO_NOT_QUEUE | DBUS_NAME_FLAG_ALLOW_REPLACEMENT;
+  bus = g_dbus_proxy_new_sync (session,
+                               G_DBUS_PROXY_FLAGS_NONE,
+                               NULL, /* interface info */
+                               "org.freedesktop.DBus",
+                               "/org/freedesktop/DBus",
+                               "org.freedesktop.DBus",
+                               NULL, /* cancellable */
+                               &error);
+
+  request_name_flags = G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT;
   if (replace)
     request_name_flags |= DBUS_NAME_FLAG_REPLACE_EXISTING;
-  if (!dbus_g_proxy_call (bus, "RequestName", &error,
-                          G_TYPE_STRING, SHELL_DBUS_SERVICE,
-                          G_TYPE_UINT, request_name_flags,
-                          G_TYPE_INVALID,
-                          G_TYPE_UINT, &request_name_result,
-                          G_TYPE_INVALID))
-    {
-      g_printerr ("failed to acquire org.gnome.Shell: %s\n", error->message);
-      exit (1);
-    }
+
+  shell_dbus_acquire_name (bus,
+                           request_name_flags,
+                           &request_name_result,
+                           SHELL_DBUS_SERVICE, TRUE);
   if (!(request_name_result == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER
         || request_name_result == DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER))
     {
-      g_printerr ("%s already exists on bus and --replace not specified\n",
-                  SHELL_DBUS_SERVICE);
+      g_printerr (SHELL_DBUS_SERVICE " already exists on bus and --replace not specified\n");
       exit (1);
     }
 
+  /*
+   * We always specify REPLACE_EXISTING to ensure we kill off
+   * the existing service if it was running.
+   */
+  request_name_flags |= G_BUS_NAME_OWNER_FLAGS_REPLACE;
+
+  shell_dbus_acquire_names (bus,
+                            request_name_flags,
   /* Also grab org.gnome.Panel to replace any existing panel process */
-  if (!dbus_g_proxy_call (bus, "RequestName", &error, G_TYPE_STRING,
-                          "org.gnome.Panel", G_TYPE_UINT,
-                          DBUS_NAME_FLAG_REPLACE_EXISTING | request_name_flags,
-                          G_TYPE_INVALID, G_TYPE_UINT,
-                          &request_name_result, G_TYPE_INVALID))
-    {
-      g_print ("failed to acquire org.gnome.Panel: %s\n", error->message);
-      exit (1);
-    }
-
-  /* ...and the org.gnome.Magnifier service.
-   */
-  if (!dbus_g_proxy_call (bus, "RequestName", &error,
-                          G_TYPE_STRING, MAGNIFIER_DBUS_SERVICE,
-                          G_TYPE_UINT, DBUS_NAME_FLAG_REPLACE_EXISTING | request_name_flags,
-                          G_TYPE_INVALID,
-                          G_TYPE_UINT, &request_name_result,
-                          G_TYPE_INVALID))
-    {
-      g_print ("failed to acquire %s: %s\n", MAGNIFIER_DBUS_SERVICE, error->message);
-      /* Failing to acquire the magnifer service is not fatal.  Log the error,
-       * but keep going. */
-    }
-
-  /* ...and the org.freedesktop.Notifications service; we always
-   * specify REPLACE_EXISTING to ensure we kill off
-   * notification-daemon if it was running.
-   */
-  if (!dbus_g_proxy_call (bus, "RequestName", &error,
-                          G_TYPE_STRING, "org.freedesktop.Notifications",
-                          G_TYPE_UINT, DBUS_NAME_FLAG_REPLACE_EXISTING | request_name_flags,
-                          G_TYPE_INVALID,
-                          G_TYPE_UINT, &request_name_result,
-                          G_TYPE_INVALID))
-    {
-      g_print ("failed to acquire org.freedesktop.Notifications: %s\n", error->message);
-    }
-
+                            "org.gnome.Panel", TRUE,
+  /* ...and the org.gnome.Magnifier service. */
+                            MAGNIFIER_DBUS_SERVICE, FALSE,
+  /* ...and the org.freedesktop.Notifications service. */
+                            "org.freedesktop.Notifications", FALSE,
+                            NULL);
   /* ...and the on-screen keyboard service */
-  if (!dbus_g_proxy_call (bus, "RequestName", &error,
-                          G_TYPE_STRING, "org.gnome.Caribou.Keyboard",
-                          G_TYPE_UINT, DBUS_NAME_FLAG_REPLACE_EXISTING,
-                          G_TYPE_INVALID,
-                          G_TYPE_UINT, &request_name_result,
-                          G_TYPE_INVALID))
-    {
-      g_print ("failed to acquire org.gnome.Caribou.Keyboard: %s\n", error->message);
-    }
-
+  shell_dbus_acquire_name (bus,
+                           DBUS_NAME_FLAG_REPLACE_EXISTING,
+                           &request_name_result,
+                           "org.gnome.Caribou.Keyboard", FALSE);
   g_object_unref (bus);
-}
-
-static void
-constrain_tooltip (StTooltip             *tooltip,
-                   const ClutterGeometry *geometry,
-                   ClutterGeometry       *adjusted_geometry,
-                   gpointer               data)
-{
-  const ClutterGeometry *tip_area = st_tooltip_get_tip_area (tooltip);
-  ShellGlobal *global = shell_global_get ();
-  MetaScreen *screen = shell_global_get_screen (global);
-  int n_monitors = meta_screen_get_n_monitors (screen);
-  int i;
-
-  *adjusted_geometry = *geometry;
-
-  /* A point that determines what screen we'll constrain to */
-  int x = tip_area->x + tip_area->width / 2;
-  int y = tip_area->y + tip_area->height / 2;
-
-  for (i = 0; i < n_monitors; i++)
-    {
-      MetaRectangle rect;
-      meta_screen_get_monitor_geometry (screen, i, &rect);
-      if (x >= rect.x && x < rect.x + rect.width &&
-          y >= rect.y && y < rect.y + rect.height)
-        {
-          if (adjusted_geometry->x + adjusted_geometry->width > rect.x + rect.width)
-            adjusted_geometry->x = rect.x + rect.width - adjusted_geometry->width;
-          if (adjusted_geometry->x < rect.x)
-            adjusted_geometry->x = rect.x;
-
-          if (adjusted_geometry->y + adjusted_geometry->height > rect.y + rect.height)
-            adjusted_geometry->y = rect.y + rect.height - adjusted_geometry->height;
-          if (adjusted_geometry->y < rect.y)
-            adjusted_geometry->y = rect.y;
-
-          return;
-        }
-    }
-}
-
-static void
-update_font_options (GtkSettings *settings)
-{
-  StThemeContext *context;
-  ClutterStage *stage;
-  ClutterBackend *backend;
-  gint dpi;
-  gint hinting;
-  gchar *hint_style_str;
-  cairo_hint_style_t hint_style = CAIRO_HINT_STYLE_NONE;
-  gint antialias;
-  cairo_antialias_t antialias_mode = CAIRO_ANTIALIAS_NONE;
-  cairo_font_options_t *options;
-
-  g_object_get (settings,
-                "gtk-xft-dpi", &dpi,
-                "gtk-xft-antialias", &antialias,
-                "gtk-xft-hinting", &hinting,
-                "gtk-xft-hintstyle", &hint_style_str,
-                NULL);
-
-  stage = CLUTTER_STAGE (clutter_stage_get_default ());
-  context = st_theme_context_get_for_stage (stage);
-
-  if (dpi != -1)
-    /* GTK stores resolution as 1024 * dots/inch */
-    st_theme_context_set_resolution (context, dpi / 1024);
-  else
-    st_theme_context_set_default_resolution (context);
-
-  st_tooltip_set_constrain_func (stage, constrain_tooltip, NULL, NULL);
-
-  /* Clutter (as of 0.9) passes comprehensively wrong font options
-   * override whatever set_font_flags() did above.
-   *
-   * http://bugzilla.openedhand.com/show_bug.cgi?id=1456
-   */
-  backend = clutter_get_default_backend ();
-  options = cairo_font_options_create ();
-
-  cairo_font_options_set_hint_metrics (options, CAIRO_HINT_METRICS_ON);
-
-  if (hinting >= 0 && !hinting)
-    {
-      hint_style = CAIRO_HINT_STYLE_NONE;
-    }
-  else if (hint_style_str)
-    {
-      if (strcmp (hint_style_str, "hintnone") == 0)
-        hint_style = CAIRO_HINT_STYLE_NONE;
-      else if (strcmp (hint_style_str, "hintslight") == 0)
-        hint_style = CAIRO_HINT_STYLE_SLIGHT;
-      else if (strcmp (hint_style_str, "hintmedium") == 0)
-        hint_style = CAIRO_HINT_STYLE_MEDIUM;
-      else if (strcmp (hint_style_str, "hintfull") == 0)
-        hint_style = CAIRO_HINT_STYLE_FULL;
-    }
-
-  g_free (hint_style_str);
-
-  cairo_font_options_set_hint_style (options, hint_style);
-
-  /* We don't want to turn on subpixel anti-aliasing; since Clutter
-   * doesn't currently have the code to support ARGB masks,
-   * generating them then squashing them back to A8 is pointless.
-   */
-  antialias_mode = (antialias < 0 || antialias) ? CAIRO_ANTIALIAS_GRAY
-                                                : CAIRO_ANTIALIAS_NONE;
-
-  cairo_font_options_set_antialias (options, antialias_mode);
-
-  clutter_backend_set_font_options (backend, options);
-  cairo_font_options_destroy (options);
-}
-
-static void
-settings_notify_cb (GtkSettings *settings,
-                    GParamSpec  *pspec,
-                    gpointer     data)
-{
-  update_font_options (settings);
-}
-
-static void
-shell_fonts_init (void)
-{
-  GtkSettings *settings;
-
-  /* Disable text mipmapping; it causes problems on pre-GEM Intel
-   * drivers and we should just be rendering text at the right
-   * size rather than scaling it. If we do effects where we dynamically
-   * zoom labels, then we might want to reconsider.
-   */
-  clutter_set_font_flags (clutter_get_font_flags () & ~CLUTTER_FONT_MIPMAPPING);
-
-  settings = gtk_settings_get_default ();
-  g_object_connect (settings,
-                    "signal::notify::gtk-xft-dpi",
-                    G_CALLBACK (settings_notify_cb), NULL,
-                    "signal::notify::gtk-xft-antialias",
-                    G_CALLBACK (settings_notify_cb), NULL,
-                    "signal::notify::gtk-xft-hinting",
-                    G_CALLBACK (settings_notify_cb), NULL,
-                    "signal::notify::gtk-xft-hintstyle",
-                    G_CALLBACK (settings_notify_cb), NULL,
-                    NULL);
-  update_font_options (settings);
+  g_object_unref (session);
 }
 
 static void
 shell_prefs_init (void)
 {
-  meta_prefs_override_preference_location ("/apps/mutter/general/attach_modal_dialogs",
-                                           "/desktop/gnome/shell/windows/attach_modal_dialogs");
-  meta_prefs_override_preference_location ("/apps/mutter/general/workspaces_only_on_primary",
-                                           "/desktop/gnome/shell/windows/workspaces_only_on_primary");
-  meta_prefs_override_preference_location ("/apps/metacity/general/button_layout",
-                                           "/desktop/gnome/shell/windows/button_layout");
-  meta_prefs_override_preference_location ("/apps/metacity/general/edge_tiling",
-                                           "/desktop/gnome/shell/windows/edge_tiling");
-  meta_prefs_override_preference_location ("/apps/metacity/general/theme",
-                                           "/desktop/gnome/shell/windows/theme");
+  meta_prefs_override_preference_schema ("attach-modal-dialogs",
+                                         OVERRIDES_SCHEMA);
+  meta_prefs_override_preference_schema ("dynamic-workspaces",
+                                         OVERRIDES_SCHEMA);
+  meta_prefs_override_preference_schema ("workspaces-only-on-primary",
+                                         OVERRIDES_SCHEMA);
+  meta_prefs_override_preference_schema ("button-layout",
+                                         OVERRIDES_SCHEMA);
+  meta_prefs_override_preference_schema ("edge-tiling",
+                                         OVERRIDES_SCHEMA);
 }
-
-/* This is an IBus workaround. The flow of events with IBus is that every time
- * it gets gets a key event, it:
- *
- *  Sends it to the daemon via D-Bus asynchronously
- *  When it gets an reply, synthesizes a new GdkEvent and puts it into the
- *   GDK event queue with gdk_event_put(), including
- *   IBUS_FORWARD_MASK = 1 << 25 in the state to prevent a loop.
- *
- * (Normally, IBus uses the GTK+ key snooper mechanism to get the key
- * events early, but since our key events aren't visible to GTK+ key snoopers,
- * IBus will instead get the events via the standard
- * GtkIMContext.filter_keypress() mechanism.)
- *
- * There are a number of potential problems here; probably the worst
- * problem is that IBus doesn't forward the timestamp with the event
- * so that every key event that gets delivered ends up with
- * GDK_CURRENT_TIME.  This creates some very subtle bugs; for example
- * if you have IBus running and a keystroke is used to trigger
- * launching an application, focus stealing prevention won't work
- * right. http://code.google.com/p/ibus/issues/detail?id=1184
- *
- * In any case, our normal flow of key events is:
- *
- *  GDK filter function => clutter_x11_handle_event => clutter actor
- *
- * So, if we see a key event that gets delivered via the GDK event handler
- * function - then we know it must be one of these synthesized events, and
- * we should push it back to clutter.
- *
- * To summarize, the full key event flow with IBus is:
- *
- *   GDK filter function
- *     => Mutter
- *     => gnome_shell_plugin_xevent_filter()
- *     => clutter_x11_handle_event()
- *     => clutter event delivery to actor
- *     => gtk_im_context_filter_event()
- *     => sent to IBus daemon
- *     => response received from IBus daemon
- *     => gdk_event_put()
- *     => GDK event handler
- *     => <this function>
- *     => clutter_event_put()
- *     => clutter event delivery to actor
- *
- * Anything else we see here we just pass on to the normal GDK event handler
- * gtk_main_do_event().
- */
-static void
-gnome_shell_gdk_event_handler (GdkEvent *event_gdk,
-                               gpointer  data)
-{
-  if (event_gdk->type == GDK_KEY_PRESS || event_gdk->type == GDK_KEY_RELEASE)
-    {
-      ClutterActor *stage;
-      Window stage_xwindow;
-
-      stage = clutter_stage_get_default ();
-      stage_xwindow = clutter_x11_get_stage_window (CLUTTER_STAGE (stage));
-
-      if (GDK_WINDOW_XID (event_gdk->key.window) == stage_xwindow)
-        {
-          ClutterDeviceManager *device_manager = clutter_device_manager_get_default ();
-          ClutterInputDevice *keyboard = clutter_device_manager_get_core_device (device_manager,
-                                                                                 CLUTTER_KEYBOARD_DEVICE);
-
-          ClutterEvent *event_clutter = clutter_event_new ((event_gdk->type == GDK_KEY_PRESS) ?
-                                                           CLUTTER_KEY_PRESS : CLUTTER_KEY_RELEASE);
-          event_clutter->key.time = event_gdk->key.time;
-          event_clutter->key.flags = CLUTTER_EVENT_NONE;
-          event_clutter->key.stage = CLUTTER_STAGE (stage);
-          event_clutter->key.source = NULL;
-
-          /* This depends on ClutterModifierType and GdkModifierType being
-           * identical, which they are currently. (They both match the X
-           * modifier state in the low 16-bits and have the same extensions.) */
-          event_clutter->key.modifier_state = event_gdk->key.state;
-
-          event_clutter->key.keyval = event_gdk->key.keyval;
-          event_clutter->key.hardware_keycode = event_gdk->key.hardware_keycode;
-          event_clutter->key.unicode_value = gdk_keyval_to_unicode (event_clutter->key.keyval);
-          event_clutter->key.device = keyboard;
-
-          clutter_event_put (event_clutter);
-          clutter_event_free (event_clutter);
-
-          return;
-        }
-    }
-
-  gtk_main_do_event (event_gdk);
-}
-
 
 static void
 malloc_statistics_callback (ShellPerfLog *perf_log,
@@ -433,15 +217,6 @@ shell_perf_log_init (void)
   shell_perf_log_add_statistics_callback (perf_log,
                                           malloc_statistics_callback,
                                           NULL, NULL);
-}
-
-static void
-muted_log_handler (const char     *log_domain,
-                   GLogLevelFlags  log_level,
-                   const char     *message,
-                   gpointer        data)
-{
-  /* Intentionally empty to discard message */
 }
 
 static void
@@ -531,26 +306,13 @@ main (int argc, char **argv)
 
   shell_dbus_init (meta_get_replace_current_wm ());
   shell_a11y_init ();
-  shell_fonts_init ();
   shell_perf_log_init ();
   shell_prefs_init ();
-
-  gdk_event_handler_set (gnome_shell_gdk_event_handler, NULL, NULL);
 
   g_irepository_prepend_search_path (GNOME_SHELL_PKGLIBDIR);
 #if HAVE_BLUETOOTH
   g_irepository_prepend_search_path (BLUETOOTH_DIR);
 #endif
-
-  /* Disable debug spew from various libraries */
-  g_log_set_handler ("Gvc", G_LOG_LEVEL_DEBUG,
-                     muted_log_handler, NULL);
-  g_log_set_handler ("AccountsService", G_LOG_LEVEL_DEBUG,
-                     muted_log_handler, NULL);
-  g_log_set_handler ("Bluetooth", G_LOG_LEVEL_DEBUG | G_LOG_LEVEL_MESSAGE,
-                     muted_log_handler, NULL);
-  g_log_set_handler ("tp-glib/proxy", G_LOG_LEVEL_DEBUG,
-                     muted_log_handler, NULL);
 
   /* Turn on telepathy-glib debugging but filter it out in
    * default_log_handler. This handler also exposes all the logs over D-Bus

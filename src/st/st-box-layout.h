@@ -25,7 +25,7 @@
 #ifndef _ST_BOX_LAYOUT_H
 #define _ST_BOX_LAYOUT_H
 
-#include <st/st-container.h>
+#include <st/st-widget.h>
 
 G_BEGIN_DECLS
 
@@ -64,14 +64,14 @@ typedef struct _StBoxLayoutPrivate StBoxLayoutPrivate;
 struct _StBoxLayout
 {
   /*< private >*/
-  StContainer parent;
+  StWidget parent;
 
   StBoxLayoutPrivate *priv;
 };
 
 struct _StBoxLayoutClass
 {
-  StContainerClass parent_class;
+  StWidgetClass parent_class;
 };
 
 GType st_box_layout_get_type (void);
@@ -85,14 +85,6 @@ gboolean st_box_layout_get_vertical   (StBoxLayout *box);
 void     st_box_layout_set_pack_start (StBoxLayout *box,
                                        gboolean     pack_start);
 gboolean st_box_layout_get_pack_start (StBoxLayout *box);
-
-void     st_box_layout_insert_actor (StBoxLayout  *self,
-                                     ClutterActor *actor,
-                                     int           pos);
-
-void     st_box_layout_insert_before (StBoxLayout  *self,
-                                      ClutterActor *actor,
-                                      ClutterActor *sibling);
 
 G_END_DECLS
 

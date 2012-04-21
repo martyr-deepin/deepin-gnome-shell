@@ -1,7 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const AccountsService = imports.gi.AccountsService;
-const DBus = imports.dbus;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Lang = imports.lang;
@@ -10,6 +9,7 @@ const Shell = imports.gi.Shell;
 const St = imports.gi.St;
 const Tp = imports.gi.TelepathyGLib;
 const UPowerGlib = imports.gi.UPowerGlib;
+const Atk = imports.gi.Atk;
 
 const GnomeSession = imports.misc.gnomeSession;
 const Main = imports.ui.main;
@@ -41,15 +41,12 @@ const IMStatus = {
 // Copyright (C) 2008,2009 Red Hat, Inc.
 
 
-function IMStatusItem(label, iconName) {
-    this._init(label, iconName);
-}
-
-IMStatusItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+const IMStatusItem = new Lang.Class({
+    Name: 'IMStatusItem',
+    Extends: PopupMenu.PopupBaseMenuItem,
 
     _init: function(label, iconName) {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+        this.parent();
 
         this.actor.add_style_class_name('status-chooser-status-item');
 
@@ -60,21 +57,18 @@ IMStatusItem.prototype = {
             this._icon.icon_name = iconName;
 
         this.label = new St.Label({ text: label });
+        this.actor.label_actor = this.label;
         this.addActor(this.label);
     }
-};
+});
 
-function IMUserNameItem() {
-    this._init();
-}
-
-IMUserNameItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+const IMUserNameItem = new Lang.Class({
+    Name: 'IMUserNameItem',
+    Extends: PopupMenu.PopupBaseMenuItem,
 
     _init: function() {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this,
-                                                         { reactive: false,
-                                                           style_class: 'status-chooser-user-name' });
+        this.parent({ reactive: false,
+                      style_class: 'status-chooser-user-name' });
 
         this._wrapper = new Shell.GenericContainer();
         this._wrapper.connect('get-preferred-width',
@@ -103,19 +97,15 @@ IMUserNameItem.prototype = {
     _wrapperAllocate: function(actor, box, flags) {
         this.label.allocate(box, flags);
     }
-};
+});
 
-function IMStatusChooserItem() {
-    this._init();
-}
-
-IMStatusChooserItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+const IMStatusChooserItem = new Lang.Class({
+    Name: 'IMStatusChooserItem',
+    Extends: PopupMenu.PopupBaseMenuItem,
 
     _init: function() {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call (this,
-                                                          { reactive: false,
-                                                            style_class: 'status-chooser' });
+        this.parent({ reactive: false,
+                      style_class: 'status-chooser' });
 
         this._iconBin = new St.Button({ style_class: 'status-chooser-user-icon' });
         this.addActor(this._iconBin);
@@ -158,21 +148,33 @@ IMStatusChooserItem.prototype = {
                             Lang.bind(this, this._changeIMStatus));
 
         this._presence = new GnomeSession.Presence();
-        this._presence.connect('StatusChanged',
-                               Lang.bind(this, this._sessionStatusChanged));
+        this._presence.connectSignal('StatusChanged', Lang.bind(this, function(proxy, senderName, [status]) {
+            this._sessionStatusChanged(status);
+        }));
 
         this._sessionPresenceRestored = false;
         this._imPresenceRestored = false;
         this._currentPresence = undefined;
 
-        this._accountMgr = Tp.AccountManager.dup()
+        this._accountMgr = Tp.AccountManager.dup();
         this._accountMgr.connect('most-available-presence-changed',
                                  Lang.bind(this, this._IMStatusChanged));
+        this._accountMgr.connect('account-enabled',
+                                 Lang.bind(this, this._IMAccountsChanged));
+        this._accountMgr.connect('account-disabled',
+                                 Lang.bind(this, this._IMAccountsChanged));
+        this._accountMgr.connect('account-removed',
+                                 Lang.bind(this, this._IMAccountsChanged));
+        this._accountMgr.connect('account-validity-changed',
+                                 Lang.bind(this, this._IMAccountsChanged));
         this._accountMgr.prepare_async(null, Lang.bind(this,
             function(mgr) {
                 let [presence, status, msg] = mgr.get_most_available_presence();
 
                 let savedPresence = global.settings.get_int('saved-im-presence');
+
+                this._IMAccountsChanged(mgr);
+
                 if (savedPresence == presence) {
                     this._IMStatusChanged(mgr, presence, status, msg);
                 } else {
@@ -197,6 +199,21 @@ IMStatusChooserItem.prototype = {
             if (this.actor.mapped)
                 this._updateUser();
         }));
+    },
+
+    destroy: function() {
+        // clean up signal handlers
+        if (this._userLoadedId != 0) {
+            this._user.disconnect(this._userLoadedId);
+            this._userLoadedId = 0;
+        }
+
+        if (this._userChangedId != 0) {
+            this._user.disconnect(this._userChangedId);
+            this._userChangedId = 0;
+        }
+
+        this.parent();
     },
 
     // Override getColumnWidths()/setColumnWidths() to make the item
@@ -226,7 +243,8 @@ IMStatusChooserItem.prototype = {
     },
 
     _setIconFromFile: function(iconFile) {
-        this._iconBin.set_style('background-image: url("' + iconFile + '");');
+        this._iconBin.set_style('background-image: url("' + iconFile + '");' +
+                                'background-size: contain;');
         this._iconBin.child = null;
     },
 
@@ -267,6 +285,13 @@ IMStatusChooserItem.prototype = {
         }
     },
 
+    _IMAccountsChanged: function(mgr) {
+        let accounts = mgr.get_valid_accounts().filter(function(account) {
+            return account.enabled;
+        });
+        this._combo.setSensitive(accounts.length > 0);
+    },
+
     _IMStatusChanged: function(accountMgr, presence, status, message) {
         if (!this._imPresenceRestored)
             this._imPresenceRestored = true;
@@ -278,12 +303,12 @@ IMStatusChooserItem.prototype = {
         this._setComboboxPresence(presence);
 
         if (!this._sessionPresenceRestored) {
-            this._presence.getStatus(Lang.bind(this, this._sessionStatusChanged));
+            this._sessionStatusChanged(this._presence.status);
             return;
         }
 
         if (presence == Tp.ConnectionPresenceType.AVAILABLE)
-            this._presence.setStatus(GnomeSession.PresenceStatus.AVAILABLE);
+            this._presence.status = GnomeSession.PresenceStatus.AVAILABLE;
 
         // We ignore the actual value of _expectedPresence and never safe
         // the first presence change after an "automatic" change, assuming
@@ -355,27 +380,38 @@ IMStatusChooserItem.prototype = {
         if (sessionStatus == GnomeSession.PresenceStatus.IDLE) {
             // Only change presence if the current one is "more present" than
             // idle
-            if (this._currentPresence != Tp.ConnectionPresenceType.OFFLINE)
+            if (this._currentPresence != Tp.ConnectionPresenceType.OFFLINE &&
+                this._currentPresence != Tp.ConnectionPresenceType.HIDDEN)
                 return Tp.ConnectionPresenceType.EXTENDED_AWAY;
         }
 
         return this._currentPresence;
     },
 
-    _sessionStatusChanged: function(sessionPresence, sessionStatus) {
+    _sessionStatusChanged: function(sessionStatus) {
         if (!this._imPresenceRestored)
             return;
 
+        let savedStatus = global.settings.get_int('saved-session-presence');
         if (!this._sessionPresenceRestored) {
-            let savedStatus = global.settings.get_int('saved-session-presence');
+
+            // We should never save/restore a status other than AVAILABLE
+            // or BUSY
+            if (savedStatus != GnomeSession.PresenceStatus.AVAILABLE &&
+                savedStatus != GnomeSession.PresenceStatus.BUSY)
+                savedStatus = GnomeSession.PresenceStatus.AVAILABLE;
+
             if (sessionStatus != savedStatus) {
-                this._presence.setStatus(savedStatus);
+                this._presence.status = savedStatus;
                 return;
             }
             this._sessionPresenceRestored = true;
         }
 
-        global.settings.set_int('saved-session-presence', sessionStatus);
+        if ((sessionStatus == GnomeSession.PresenceStatus.AVAILABLE ||
+             sessionStatus == GnomeSession.PresenceStatus.BUSY) &&
+            savedStatus != sessionStatus)
+            global.settings.set_int('saved-session-presence', sessionStatus);
 
         let [presence, s, msg] = this._accountMgr.get_most_available_presence();
         let newPresence, status;
@@ -391,18 +427,18 @@ IMStatusChooserItem.prototype = {
         this._expectedPresence = newPresence;
         this._accountMgr.set_all_requested_presences(newPresence, status, msg);
     }
-};
+});
 
 
-function UserMenuButton() {
-    this._init();
-}
-
-UserMenuButton.prototype = {
-    __proto__: PanelMenu.Button.prototype,
+const UserMenuButton = new Lang.Class({
+    Name: 'UserMenuButton',
+    Extends: PanelMenu.Button,
 
     _init: function() {
-        PanelMenu.Button.prototype._init.call(this, 0.0);
+        this.parent(0.0);
+
+        this.actor.accessible_role = Atk.Role.MENU;
+
         let box = new St.BoxLayout({ name: 'panelUserMenu' });
         this.actor.add_actor(box);
 
@@ -415,7 +451,7 @@ UserMenuButton.prototype = {
         this._session = new GnomeSession.SessionManager();
         this._haveShutdown = true;
 
-        this._account_mgr = Tp.AccountManager.dup()
+        this._accountMgr = Tp.AccountManager.dup();
 
         this._upClient = new UPowerGlib.Client();
         this._screenSaverProxy = new ScreenSaver.ScreenSaverProxy();
@@ -438,26 +474,31 @@ UserMenuButton.prototype = {
         this._idleIcon = new St.Icon({ icon_name: 'user-idle',
                                        style_class: 'popup-menu-icon' });
 
-        this._presence.connect('StatusChanged',
-                               Lang.bind(this, this._updateSwitch));
-        this._presence.getStatus(Lang.bind(this, this._updateSwitch));
-
-        this._account_mgr.connect('most-available-presence-changed',
+        this._accountMgr.connect('most-available-presence-changed',
                                   Lang.bind(this, this._updatePresenceIcon));
-        this._account_mgr.prepare_async(null, Lang.bind(this,
+        this._accountMgr.prepare_async(null, Lang.bind(this,
             function(mgr) {
                 let [presence, s, msg] = mgr.get_most_available_presence();
                 this._updatePresenceIcon(mgr, presence, s, msg);
             }));
 
         this._name = new St.Label();
+        this.actor.label_actor = this._name;
         box.add(this._name, { y_align: St.Align.MIDDLE, y_fill: false });
         this._userLoadedId = this._user.connect('notify::is-loaded', Lang.bind(this, this._updateUserName));
         this._userChangedId = this._user.connect('changed', Lang.bind(this, this._updateUserName));
         this._updateUserName();
 
         this._createSubMenu();
+
+        this._updateSwitch(this._presence.status);
+        this._presence.connectSignal('StatusChanged', Lang.bind(this, function (proxy, senderName, [status]) {
+            this._updateSwitch(status);
+        }));
+
         this._userManager.connect('notify::is-loaded',
+                                  Lang.bind(this, this._updateSwitchUser));
+        this._userManager.connect('notify::has-multiple-users',
                                   Lang.bind(this, this._updateSwitchUser));
         this._userManager.connect('user-added',
                                   Lang.bind(this, this._updateSwitchUser));
@@ -503,7 +544,9 @@ UserMenuButton.prototype = {
 
     _updateSwitchUser: function() {
         let allowSwitch = !this._lockdownSettings.get_boolean(DISABLE_USER_SWITCH_KEY);
-        if (allowSwitch && this._userManager.can_switch ())
+        if (allowSwitch &&
+            this._userManager.can_switch() &&
+            this._userManager.has_multiple_users)
             this._loginScreenItem.actor.show();
         else
             this._loginScreenItem.actor.hide();
@@ -557,7 +600,7 @@ UserMenuButton.prototype = {
         }
     },
 
-    _updateSwitch: function(presence, status) {
+    _updateSwitch: function(status) {
         let active = status == GnomeSession.PresenceStatus.AVAILABLE;
         this._notificationsSwitch.setToggleState(active);
     },
@@ -586,7 +629,7 @@ UserMenuButton.prototype = {
         this._statusChooser = item;
 
         item = new PopupMenu.PopupSwitchMenuItem(_("Notifications"));
-        item.connect('activate', Lang.bind(this, this._updatePresenceStatus));
+        item.connect('toggled', Lang.bind(this, this._updatePresenceStatus));
         this.menu.addMenuItem(item);
         this._notificationsSwitch = item;
 
@@ -638,7 +681,7 @@ UserMenuButton.prototype = {
         } else {
             status = GnomeSession.PresenceStatus.BUSY;
 
-            let [presence, s, msg] = this._account_mgr.get_most_available_presence();
+            let [presence, s, msg] = this._accountMgr.get_most_available_presence();
             let newPresence = this._statusChooser.getIMPresenceForSessionStatus(status);
             if (newPresence != presence &&
                 newPresence == Tp.ConnectionPresenceType.BUSY)
@@ -646,7 +689,7 @@ UserMenuButton.prototype = {
                             _("Notifications are now disabled, including chat messages. Your online status has been adjusted to let others know that you might not see their messages."));
         }
 
-        this._presence.setStatus(status);
+        this._presence.status = status;
     },
 
     _onMyAccountActivate: function() {
@@ -691,12 +734,12 @@ UserMenuButton.prototype = {
 
         if (this._haveSuspend &&
             this._suspendOrPowerOffItem.state == PopupMenu.PopupAlternatingMenuItemState.DEFAULT) {
-            // Ensure we only suspend after the screensaver has activated
-            this._screenSaverProxy.SetActiveRemote(true, Lang.bind(this, function() {
+            // Ensure we only suspend after locking the screen
+            this._screenSaverProxy.LockRemote(Lang.bind(this, function() {
                 this._upClient.suspend_sync(null);
             }));
         } else {
             this._session.ShutdownRemote();
         }
     }
-};
+});

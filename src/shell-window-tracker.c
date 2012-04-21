@@ -20,7 +20,6 @@
 #include "shell-window-tracker-private.h"
 #include "shell-app-private.h"
 #include "shell-global.h"
-#include "shell-marshal.h"
 #include "st.h"
 
 /* This file includes modified code from
@@ -117,15 +116,13 @@ shell_window_tracker_class_init (ShellWindowTrackerClass *klass)
                                    SHELL_TYPE_WINDOW_TRACKER,
                                    G_SIGNAL_RUN_LAST,
                                    0,
-                                   NULL, NULL,
-                                   g_cclosure_marshal_VOID__BOXED,
+                                   NULL, NULL, NULL,
                                    G_TYPE_NONE, 1, SHELL_TYPE_STARTUP_SEQUENCE);
   signals[TRACKED_WINDOWS_CHANGED] = g_signal_new ("tracked-windows-changed",
                                                    SHELL_TYPE_WINDOW_TRACKER,
                                                    G_SIGNAL_RUN_LAST,
                                                    0,
-                                                   NULL, NULL,
-                                                   g_cclosure_marshal_VOID__VOID,
+                                                   NULL, NULL, NULL,
                                                    G_TYPE_NONE, 0);
 }
 
@@ -413,6 +410,9 @@ update_focus_app (ShellWindowTracker *self)
   new_focus_win = meta_display_get_focus_window (shell_global_get_display (shell_global_get ()));
   new_focus_app = new_focus_win ? shell_window_tracker_get_window_app (self, new_focus_win) : NULL;
 
+  if (new_focus_app)
+    shell_app_update_window_actions (new_focus_app, new_focus_win);
+
   set_focus_app (self, new_focus_app);
 }
 
@@ -639,7 +639,7 @@ shell_window_tracker_get_window_app (ShellWindowTracker *tracker,
 
 /**
  * shell_window_tracker_get_app_from_pid:
- * @self; A #ShellAppSystem
+ * @tracker: A #ShellAppSystem
  * @pid: A Unix process identifier
  *
  * Look up the application corresponding to a process.
@@ -647,7 +647,7 @@ shell_window_tracker_get_window_app (ShellWindowTracker *tracker,
  * Returns: (transfer none): A #ShellApp, or %NULL if none
  */
 ShellApp *
-shell_window_tracker_get_app_from_pid (ShellWindowTracker *self, 
+shell_window_tracker_get_app_from_pid (ShellWindowTracker *tracker,
                                        int                 pid)
 {
   GSList *running = shell_app_system_get_running (shell_app_system_get_default());
@@ -742,7 +742,7 @@ on_focus_window_changed (MetaDisplay        *display,
 
 /**
  * shell_window_tracker_get_startup_sequences:
- * @self:
+ * @tracker:
  *
  * Returns: (transfer none) (element-type ShellStartupSequence): Currently active startup sequences
  */
@@ -814,6 +814,12 @@ gboolean
 shell_startup_sequence_get_completed (ShellStartupSequence *sequence)
 {
   return sn_startup_sequence_get_completed ((SnStartupSequence*)sequence);
+}
+
+int
+shell_startup_sequence_get_workspace (ShellStartupSequence *sequence)
+{
+  return sn_startup_sequence_get_workspace ((SnStartupSequence*)sequence);
 }
 
 /**

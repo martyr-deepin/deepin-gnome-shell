@@ -6,14 +6,18 @@ const Shell = imports.gi.Shell;
 const Main = imports.ui.main;
 const MessageTray = imports.ui.messageTray;
 
-function WindowAttentionHandler() {
-    this._init();
-}
+const WindowAttentionHandler = new Lang.Class({
+    Name: 'WindowAttentionHandler',
 
-WindowAttentionHandler.prototype = {
     _init : function() {
         this._tracker = Shell.WindowTracker.get_default();
         global.display.connect('window-demands-attention', Lang.bind(this, this._onWindowDemandsAttention));
+    },
+
+    _getTitleAndBanner: function(app, window) {
+        let title = app.get_name();
+        let banner = _("'%s' is ready").format(window.get_title());
+        return [title, banner]
     },
 
     _onWindowDemandsAttention : function(display, window) {
@@ -32,28 +36,24 @@ WindowAttentionHandler.prototype = {
         let source = new Source(app, window);
         Main.messageTray.add(source);
 
-        let banner = _("'%s' is ready").format(window.title);
-        let title = app.get_name();
+        let [title, banner] = this._getTitleAndBanner(app, window);
 
         let notification = new MessageTray.Notification(source, title, banner);
         source.notify(notification);
 
-        source.signalIDs.push(window.connect('notify::title',
-                                             Lang.bind(this, function() {
-                                                 notification.update(title, banner);
-                                             })));
+        source.signalIDs.push(window.connect('notify::title', Lang.bind(this, function() {
+            let [title, banner] = this._getTitleAndBanner(app, window);
+            notification.update(title, banner);
+        })));
     }
-};
+});
 
-function Source(app, window) {
-    this._init(app, window);
-}
-
-Source.prototype = {
-    __proto__ : MessageTray.Source.prototype,
+const Source = new Lang.Class({
+    Name: 'WindowAttentionSource',
+    Extends: MessageTray.Source,
 
     _init: function(app, window) {
-        MessageTray.Source.prototype._init.call(this, app.get_name());
+        this.parent(app.get_name());
         this._window = window;
         this._app = app;
         this._setSummaryIcon(this.createNotificationIcon());
@@ -81,4 +81,4 @@ Source.prototype = {
         Main.activateWindow(this._window);
         this.destroy();
     }
-};
+});

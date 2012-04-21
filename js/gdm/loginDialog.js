@@ -33,7 +33,6 @@ const St = imports.gi.St;
 const GdmGreeter = imports.gi.GdmGreeter;
 
 const Batch = imports.gdm.batch;
-const DBus = imports.dbus;
 const Fprint = imports.gdm.fingerprint;
 const Lightbox = imports.ui.lightbox;
 const Main = imports.ui.main;
@@ -141,11 +140,9 @@ function _smoothlyResizeActor(actor, width, height) {
     return hold;
 }
 
-function UserListItem(user, reason) {
-    this._init(user, reason);
-}
+const UserListItem = new Lang.Class({
+    Name: 'UserListItem',
 
-UserListItem.prototype = {
     _init: function(user) {
         this.user = user;
         this._userChangedId = this.user.connect('changed',
@@ -208,7 +205,8 @@ UserListItem.prototype = {
             // We use background-image instead of, say, St.TextureCache
             // so the theme writers can add a rounded frame around the image
             // and so theme writers can pick the icon size.
-            this._iconBin.set_style('background-image: url("' + iconFile + '");');
+            this._iconBin.set_style('background-image: url("' + iconFile + '");' +
+                                    'background-size: contain;');
         } else {
             this._iconBin.hide();
         }
@@ -274,15 +272,12 @@ UserListItem.prototype = {
                          });
         return hold;
     }
-
-};
+});
 Signals.addSignalMethods(UserListItem.prototype);
 
-function UserList() {
-    this._init.apply(this, arguments);
-}
+const UserList = new Lang.Class({
+    Name: 'UserList',
 
-UserList.prototype = {
     _init: function() {
         this.actor = new St.ScrollView({ style_class: 'login-dialog-user-list-view'});
         this.actor.set_policy(Gtk.PolicyType.NEVER,
@@ -493,6 +488,9 @@ UserList.prototype = {
         if (user.is_system_account())
             return;
 
+        if (user.locked)
+           return;
+
         let userName = user.get_user_name();
 
         if (!userName)
@@ -538,14 +536,12 @@ UserList.prototype = {
         item.actor.destroy();
         delete this._items[userName];
     }
-};
+});
 Signals.addSignalMethods(UserList.prototype);
 
-function SessionListItem(id, name) {
-    this._init(id, name);
-}
+const SessionListItem = new Lang.Class({
+    Name: 'SessionListItem',
 
-SessionListItem.prototype = {
     _init: function(id, name) {
         this.id = id;
 
@@ -600,14 +596,12 @@ SessionListItem.prototype = {
     _onClicked: function() {
         this.emit('activate');
     }
-};
+});
 Signals.addSignalMethods(SessionListItem.prototype);
 
-function SessionList() {
-    this._init();
-}
+const SessionList = new Lang.Class({
+    Name: 'SessionList',
 
-SessionList.prototype = {
     _init: function() {
         this.actor = new St.Bin();
 
@@ -703,7 +697,7 @@ SessionList.prototype = {
     },
 
     _populate: function() {
-        this._itemList.destroy_children();
+        this._itemList.destroy_all_children();
         this._activeSessionId = null;
         this._items = {};
 
@@ -738,24 +732,15 @@ SessionList.prototype = {
                          }));
         }
     }
-};
+});
 Signals.addSignalMethods(SessionList.prototype);
 
-function LoginDialog() {
-    if (_loginDialog == null) {
-        this._init();
-        _loginDialog = this;
-    }
-
-    return _loginDialog;
-}
-
-LoginDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
+const LoginDialog = new Lang.Class({
+    Name: 'LoginDialog',
+    Extends: ModalDialog.ModalDialog,
 
     _init: function() {
-        ModalDialog.ModalDialog.prototype._init.call(this, { shellReactive: true,
-                                                             styleClass: 'login-dialog' });
+        this.parent({ shellReactive: true, styleClass: 'login-dialog' });
         this.connect('destroy',
                      Lang.bind(this, this._onDestroy));
         this.connect('opened',
@@ -844,7 +829,7 @@ LoginDialog.prototype = {
                               x_fill: true,
                               y_fill: false,
                               x_align: St.Align.START });
-        // translators: this message is shown below the password entry field
+        // Translators: this message is shown below the password entry field
         // to indicate the user can swipe their finger instead
         this._promptFingerprintMessage = new St.Label({ text: _("(or swipe finger)"),
                                                         style_class: 'login-dialog-prompt-fingerprint-message' });
@@ -864,6 +849,9 @@ LoginDialog.prototype = {
                               x_align: St.Align.START });
         this._promptBox.hide();
 
+        // translators: this message is shown below the user list on the
+        // login screen. It can be activated to reveal an entry for
+        // manually entering the username.
         let notListedLabel = new St.Label({ text: _("Not listed?"),
                                             style_class: 'login-dialog-not-listed-label' });
         this._notListedButton = new St.Button({ style_class: 'login-dialog-not-listed-button',
@@ -905,7 +893,7 @@ LoginDialog.prototype = {
         if (!this._settings.get_boolean(_FINGERPRINT_AUTHENTICATION_KEY))
             return;
 
-        this._fprintManager.GetDefaultDeviceRemote(DBus.CALL_FLAG_START, Lang.bind(this,
+        this._fprintManager.GetDefaultDeviceRemote(Gio.DBusCallFlags.NONE, Lang.bind(this,
             function(device, error) {
                 if (!error && device)
                     this._haveFingerprintReader = true;
@@ -1396,8 +1384,8 @@ LoginDialog.prototype = {
     },
 
     close: function() {
-        ModalDialog.ModalDialog.prototype.close.call(this);
+        this.parent();
 
         Main.ctrlAltTabManager.removeGroup(this._group);
     }
-};
+});

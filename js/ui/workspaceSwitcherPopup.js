@@ -15,18 +15,16 @@ const DISPLAY_TIMEOUT = 600;
 const UP = -1;
 const DOWN = 1;
 
-function WorkspaceSwitcherPopup() {
-    this._init();
-}
+const WorkspaceSwitcherPopup = new Lang.Class({
+    Name: 'WorkspaceSwitcherPopup',
 
-WorkspaceSwitcherPopup.prototype = {
     _init : function() {
-        this.actor = new St.Group({ reactive: true,
-                                         x: 0,
-                                         y: 0,
-                                         width: global.screen_width,
-                                         height: global.screen_height,
-                                         style_class: 'workspace-switcher-group' });
+        this.actor = new St.Widget({ reactive: true,
+                                     x: 0,
+                                     y: 0,
+                                     width: global.screen_width,
+                                     height: global.screen_height,
+                                     style_class: 'workspace-switcher-group' });
         Main.uiGroup.add_actor(this.actor);
 
         this._container = new St.BoxLayout({ style_class: 'workspace-switcher-container' });
@@ -107,7 +105,7 @@ WorkspaceSwitcherPopup.prototype = {
     },
 
     _redraw : function(direction, activeWorkspaceIndex) {
-        this._list.destroy_children();
+        this._list.destroy_all_children();
 
         for (let i = 0; i < global.screen.n_workspaces; i++) {
             let indicator = null;
@@ -158,4 +156,4 @@ WorkspaceSwitcherPopup.prototype = {
                                             onCompleteScope: this
                                            });
     }
-};
+});

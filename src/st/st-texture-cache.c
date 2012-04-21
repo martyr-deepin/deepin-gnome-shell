@@ -23,15 +23,12 @@
 
 #include "st-texture-cache.h"
 #include <gtk/gtk.h>
-#define GNOME_DESKTOP_USE_UNSTABLE_API
-#include <libgnome-desktop/gnome-desktop-thumbnail.h>
 #include <string.h>
 #include <glib.h>
 
-#define CACHE_PREFIX_GICON "gicon:"
+#define CACHE_PREFIX_ICON "icon:"
 #define CACHE_PREFIX_URI "uri:"
 #define CACHE_PREFIX_URI_FOR_CAIRO "uri-for-cairo:"
-#define CACHE_PREFIX_THUMBNAIL_URI "thumbnail-uri:"
 #define CACHE_PREFIX_RAW_CHECKSUM "raw-checksum:"
 #define CACHE_PREFIX_COMPRESSED_CHECKSUM "compressed-checksum:"
 
@@ -41,12 +38,9 @@ struct _StTextureCachePrivate
 
   /* Things that were loaded with a cache policy != NONE */
   GHashTable *keyed_cache; /* char * -> CoglTexture* */
-  /* Presently this is used to de-duplicate requests for GIcons,
-   * it could in theory be extended to async URL loading and other
-   * cases too.
-   */
+
+  /* Presently this is used to de-duplicate requests for GIcons and async URIs. */
   GHashTable *outstanding_requests; /* char * -> AsyncTextureLoadData * */
-  GnomeDesktopThumbnailFactory *thumbnails;
 };
 
 static void st_texture_cache_dispose (GObject *object);
@@ -67,7 +61,7 @@ G_DEFINE_TYPE(StTextureCache, st_texture_cache, G_TYPE_OBJECT);
  * definitely don't want.  Skip that by setting 0 opacity.
  */
 static ClutterTexture *
-create_default_texture (StTextureCache *self)
+create_default_texture (void)
 {
   ClutterTexture * texture = CLUTTER_TEXTURE (clutter_texture_new ());
   g_object_set (texture, "keep-aspect-ratio", TRUE, "opacity", 0, NULL);
@@ -95,8 +89,7 @@ st_texture_cache_class_init (StTextureCacheClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0, /* no default handler slot */
-                  NULL, NULL,
-                  g_cclosure_marshal_VOID__VOID,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 0);
 }
 
@@ -117,7 +110,7 @@ st_texture_cache_evict_icons (StTextureCache *cache)
        * for GIcons even when they aren't named icons, but it's not
        * worth the complexity of parsing the key and calling
        * g_icon_new_for_string(); icon theme changes aren't normal */
-      if (g_str_has_prefix (cache_key, "gicon:"))
+      if (g_str_has_prefix (cache_key, CACHE_PREFIX_ICON))
         g_hash_table_iter_remove (&iter);
     }
 }
@@ -143,7 +136,6 @@ st_texture_cache_init (StTextureCache *self)
                                                    g_free, cogl_handle_unref);
   self->priv->outstanding_requests = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                             g_free, NULL);
-  self->priv->thumbnails = gnome_desktop_thumbnail_factory_new (GNOME_DESKTOP_THUMBNAIL_SIZE_LARGE);
 }
 
 static void
@@ -167,10 +159,6 @@ st_texture_cache_dispose (GObject *object)
     g_hash_table_destroy (self->priv->outstanding_requests);
   self->priv->outstanding_requests = NULL;
 
-  if (self->priv->thumbnails)
-    g_object_unref (self->priv->thumbnails);
-  self->priv->thumbnails = NULL;
-
   G_OBJECT_CLASS (st_texture_cache_parent_class)->dispose (object);
 }
 
@@ -179,20 +167,6 @@ st_texture_cache_finalize (GObject *object)
 {
   G_OBJECT_CLASS (st_texture_cache_parent_class)->finalize (object);
 }
-
-typedef struct {
-  StTextureCache *cache;
-  char *uri;
-  char *mimetype;
-  gboolean thumbnail;
-  GIcon *icon;
-  GtkRecentInfo *recent_info;
-  GtkIconInfo *icon_info;
-  gint width;
-  gint height;
-  StIconColors *colors;
-  gpointer user_data;
-} AsyncIconLookupData;
 
 static gboolean
 compute_pixbuf_scale (gint      width,
@@ -209,14 +183,15 @@ compute_pixbuf_scale (gint      width,
 
   if (available_width >= 0 && available_height >= 0)
     {
-      // This should keep the aspect ratio of the image intact, because if
-      // available_width < (available_height * width) / height
-      // than
-      // (available_width * height) / width < available_height
-      // So we are guaranteed to either scale the image to have an available_width
-      // for width and height scaled accordingly OR have the available_height
-      // for height and width scaled accordingly, whichever scaling results
-      // in the image that can fit both available dimensions.
+      /* This should keep the aspect ratio of the image intact, because if
+       * available_width < (available_height * width) / height
+       * then
+       * (available_width * height) / width < available_height
+       * So we are guaranteed to either scale the image to have an available_width
+       * for width and height scaled accordingly OR have the available_height
+       * for height and width scaled accordingly, whichever scaling results
+       * in the image that can fit both available dimensions.
+       */
       scaled_width = MIN (available_width, (available_height * width) / height);
       scaled_height = MIN (available_height, (available_width * height) / width);
     }
@@ -235,7 +210,7 @@ compute_pixbuf_scale (gint      width,
       scaled_width = scaled_height = 0;
     }
 
-  // Scale the image only if that will not increase its original dimensions.
+  /* Scale the image only if that will not increase its original dimensions. */
   if (scaled_width > 0 && scaled_height > 0 && scaled_width < width && scaled_height < height)
     {
       *new_width = scaled_width;
@@ -256,8 +231,7 @@ rgba_from_clutter (GdkRGBA      *rgba,
 }
 
 static GdkPixbuf *
-impl_load_pixbuf_gicon (GIcon        *icon,
-                        GtkIconInfo  *info,
+impl_load_pixbuf_gicon (GtkIconInfo  *info,
                         int           size,
                         StIconColors *colors,
                         GError      **error)
@@ -306,37 +280,54 @@ impl_load_pixbuf_gicon (GIcon        *icon,
   return pixbuf;
 }
 
-// A private structure for keeping width and height.
+/* A private structure for keeping width and height. */
 typedef struct {
   int width;
   int height;
 } Dimensions;
 
-static void
-icon_lookup_data_destroy (gpointer p)
-{
-  AsyncIconLookupData *data = p;
+/* This struct corresponds to a request for an texture.
+ * It's creasted when something needs a new texture,
+ * and destroyed when the texture data is loaded. */
+typedef struct {
+  StTextureCache *cache;
+  StTextureCachePolicy policy;
+  char *key;
 
-  if (data->icon)
+  gboolean enforced_square;
+
+  guint width;
+  guint height;
+  GSList *textures;
+
+  GtkIconInfo *icon_info;
+  StIconColors *colors;
+  char *uri;
+} AsyncTextureLoadData;
+
+static void
+texture_load_data_destroy (gpointer p)
+{
+  AsyncTextureLoadData *data = p;
+
+  if (data->icon_info)
     {
-      g_object_unref (data->icon);
       gtk_icon_info_free (data->icon_info);
+      if (data->colors)
+        st_icon_colors_unref (data->colors);
     }
   else if (data->uri)
     g_free (data->uri);
-  if (data->mimetype)
-    g_free (data->mimetype);
-  if (data->recent_info)
-    gtk_recent_info_unref (data->recent_info);
-  if (data->colors)
-    st_icon_colors_unref (data->colors);
 
-  g_free (data);
+  if (data->key)
+    g_free (data->key);
+
+  if (data->textures)
+    g_slist_free_full (data->textures, (GDestroyNotify) g_object_unref);
 }
 
 /**
  * on_image_size_prepared:
- *
  * @pixbuf_loader: #GdkPixbufLoader loading the image
  * @width: the original width of the image
  * @height: the original height of the image
@@ -401,10 +392,11 @@ impl_load_pixbuf_data (const guchar   *data,
   rotated_pixbuf = gdk_pixbuf_apply_embedded_orientation (pixbuf);
   width_after_rotation = gdk_pixbuf_get_width (rotated_pixbuf);
 
-  // There is currently no way to tell if the pixbuf will need to be rotated before it is loaded,
-  // so we only check that once it is loaded, and reload it again if it needs to be rotated in order
-  // to use the available width and height correctly.
-  // http://bugzilla.gnome.org/show_bug.cgi?id=579003
+  /* There is currently no way to tell if the pixbuf will need to be rotated before it is loaded,
+   * so we only check that once it is loaded, and reload it again if it needs to be rotated in order
+   * to use the available width and height correctly.
+   * See http://bugzilla.gnome.org/show_bug.cgi?id=579003
+   */
   if (width_before_rotation != width_after_rotation)
     {
       g_object_unref (pixbuf_loader);
@@ -413,7 +405,7 @@ impl_load_pixbuf_data (const guchar   *data,
 
       pixbuf_loader = gdk_pixbuf_loader_new ();
 
-      // We know that the image will later be rotated, so we reverse the available dimensions.
+      /* We know that the image will later be rotated, so we reverse the available dimensions. */
       available_dimensions.width = available_height;
       available_dimensions.height = available_width;
       g_signal_connect (pixbuf_loader, "size-prepared",
@@ -527,107 +519,22 @@ impl_load_pixbuf_file (const char     *uri,
   return pixbuf;
 }
 
-static GdkPixbuf *
-impl_load_thumbnail (StTextureCache    *cache,
-                     const char        *uri,
-                     const char        *mime_type,
-                     guint              size,
-                     GError           **error)
-{
-  GnomeDesktopThumbnailFactory *thumbnail_factory;
-  GdkPixbuf *pixbuf = NULL;
-  GFile *file;
-  GFileInfo *file_info;
-  GTimeVal mtime_g;
-  time_t mtime = 0;
-  char *existing_thumbnail;
-
-  file = g_file_new_for_uri (uri);
-  file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_TIME_MODIFIED, G_FILE_QUERY_INFO_NONE, NULL, NULL);
-  g_object_unref (file);
-  if (file_info)
-    {
-      g_file_info_get_modification_time (file_info, &mtime_g);
-      g_object_unref (file_info);
-      mtime = (time_t) mtime_g.tv_sec;
-    }
-
-  thumbnail_factory = cache->priv->thumbnails;
-
-  existing_thumbnail = gnome_desktop_thumbnail_factory_lookup (thumbnail_factory, uri, mtime);
-
-  if (existing_thumbnail != NULL)
-    {
-      pixbuf = gdk_pixbuf_new_from_file_at_size (existing_thumbnail, size, size, error);
-      g_free (existing_thumbnail);
-    }
-  else if (gnome_desktop_thumbnail_factory_has_valid_failed_thumbnail (thumbnail_factory, uri, mtime))
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Has failed thumbnail");
-  else if (gnome_desktop_thumbnail_factory_can_thumbnail (thumbnail_factory, uri, mime_type, mtime))
-    {
-      pixbuf = gnome_desktop_thumbnail_factory_generate_thumbnail (thumbnail_factory, uri, mime_type);
-      if (pixbuf)
-        {
-          // we need to save the thumbnail so that we don't need to generate it again in the future
-          gnome_desktop_thumbnail_factory_save_thumbnail (thumbnail_factory, pixbuf, uri, mtime);
-        }
-      else
-        {
-          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to generate thumbnail");
-          gnome_desktop_thumbnail_factory_create_failed_thumbnail (thumbnail_factory, uri, mtime);
-        }
-     }
-   return pixbuf;
-}
-
-static GIcon *
-icon_for_mimetype (const char *mimetype)
-{
-  char *content_type;
-  GIcon *icon;
-
-  content_type = g_content_type_from_mime_type (mimetype);
-  if (!content_type)
-    return NULL;
-
-  icon = g_content_type_get_icon (content_type);
-  g_free (content_type);
-  return icon;
-}
-
 static void
 load_pixbuf_thread (GSimpleAsyncResult *result,
                     GObject *object,
                     GCancellable *cancellable)
 {
   GdkPixbuf *pixbuf;
-  AsyncIconLookupData *data;
+  AsyncTextureLoadData *data;
   GError *error = NULL;
 
-  data = g_object_get_data (G_OBJECT (result), "load_pixbuf_async");
+  data = g_async_result_get_user_data (G_ASYNC_RESULT (result));
   g_assert (data != NULL);
 
-  if (data->thumbnail)
-    {
-      const char *uri;
-      const char *mimetype;
-
-      if (data->recent_info)
-        {
-          uri = gtk_recent_info_get_uri (data->recent_info);
-          mimetype = gtk_recent_info_get_mime_type (data->recent_info);
-        }
-      else
-        {
-          uri = data->uri;
-          mimetype = data->mimetype;
-        }
-      pixbuf = impl_load_thumbnail (data->cache, uri, mimetype, data->width, &error);
-    }
-  else if (data->uri)
+  if (data->uri)
     pixbuf = impl_load_pixbuf_file (data->uri, data->width, data->height, &error);
-  else if (data->icon)
-    pixbuf = impl_load_pixbuf_gicon (data->icon, data->icon_info, data->width, data->colors, &error);
+  else if (data->icon_info)
+    pixbuf = impl_load_pixbuf_gicon (data->icon_info, data->width, data->colors, &error);
   else
     g_assert_not_reached ();
 
@@ -642,127 +549,6 @@ load_pixbuf_thread (GSimpleAsyncResult *result,
                                                g_object_unref);
 }
 
-/**
- * load_icon_pixbuf_async:
- *
- * Asynchronously load the #GdkPixbuf associated with a #GIcon.  Currently
- * the #GtkIconInfo must have already been provided.
- */
-static void
-load_icon_pixbuf_async (StTextureCache       *cache,
-                        GIcon                *icon,
-                        GtkIconInfo          *icon_info,
-                        gint                  size,
-                        StIconColors         *colors,
-                        GCancellable         *cancellable,
-                        GAsyncReadyCallback   callback,
-                        gpointer              user_data)
-{
-  GSimpleAsyncResult *result;
-  AsyncIconLookupData *data;
-
-  data = g_new0 (AsyncIconLookupData, 1);
-  data->cache = cache;
-  data->icon = g_object_ref (icon);
-  data->icon_info = gtk_icon_info_copy (icon_info);
-  data->width = data->height = size;
-  if (colors)
-    data->colors = st_icon_colors_ref (colors);
-  else
-    data->colors = NULL;
-  data->user_data = user_data;
-
-  result = g_simple_async_result_new (G_OBJECT (cache), callback, user_data, load_icon_pixbuf_async);
-
-  g_object_set_data_full (G_OBJECT (result), "load_pixbuf_async", data, icon_lookup_data_destroy);
-  g_simple_async_result_run_in_thread (result, load_pixbuf_thread, G_PRIORITY_DEFAULT, cancellable);
-
-  g_object_unref (result);
-}
-
-static void
-load_uri_pixbuf_async (StTextureCache     *cache,
-                       const char         *uri,
-                       guint               width,
-                       guint               height,
-                       GCancellable       *cancellable,
-                       GAsyncReadyCallback callback,
-                       gpointer            user_data)
-{
-  GSimpleAsyncResult *result;
-  AsyncIconLookupData *data;
-
-  data = g_new0 (AsyncIconLookupData, 1);
-  data->cache = cache;
-  data->uri = g_strdup (uri);
-  data->width = width;
-  data->height = height;
-  data->user_data = user_data;
-
-  result = g_simple_async_result_new (G_OBJECT (cache), callback, user_data, load_uri_pixbuf_async);
-
-  g_object_set_data_full (G_OBJECT (result), "load_pixbuf_async", data, icon_lookup_data_destroy);
-  g_simple_async_result_run_in_thread (result, load_pixbuf_thread, G_PRIORITY_DEFAULT, cancellable);
-
-  g_object_unref (result);
-}
-
-static void
-load_thumbnail_async (StTextureCache     *cache,
-                      const char         *uri,
-                      const char         *mimetype,
-                      guint               size,
-                      GCancellable       *cancellable,
-                      GAsyncReadyCallback callback,
-                      gpointer            user_data)
-{
-  GSimpleAsyncResult *result;
-  AsyncIconLookupData *data;
-
-  data = g_new0 (AsyncIconLookupData, 1);
-  data->cache = cache;
-  data->uri = g_strdup (uri);
-  data->mimetype = g_strdup (mimetype);
-  data->thumbnail = TRUE;
-  data->width = size;
-  data->height = size;
-  data->user_data = user_data;
-
-  result = g_simple_async_result_new (G_OBJECT (cache), callback, user_data, load_thumbnail_async);
-
-  g_object_set_data_full (G_OBJECT (result), "load_pixbuf_async", data, icon_lookup_data_destroy);
-  g_simple_async_result_run_in_thread (result, load_pixbuf_thread, G_PRIORITY_DEFAULT, cancellable);
-
-  g_object_unref (result);
-}
-
-static void
-load_recent_thumbnail_async (StTextureCache     *cache,
-                             GtkRecentInfo      *info,
-                             guint               size,
-                             GCancellable       *cancellable,
-                             GAsyncReadyCallback callback,
-                             gpointer            user_data)
-{
-  GSimpleAsyncResult *result;
-  AsyncIconLookupData *data;
-
-  data = g_new0 (AsyncIconLookupData, 1);
-  data->cache = cache;
-  data->thumbnail = TRUE;
-  data->recent_info = gtk_recent_info_ref (info);
-  data->width = size;
-  data->height = size;
-  data->user_data = user_data;
-
-  result = g_simple_async_result_new (G_OBJECT (cache), callback, user_data, load_recent_thumbnail_async);
-
-  g_object_set_data_full (G_OBJECT (result), "load_pixbuf_async", data, icon_lookup_data_destroy);
-  g_simple_async_result_run_in_thread (result, load_pixbuf_thread, G_PRIORITY_DEFAULT, cancellable);
-
-  g_object_unref (result);
-}
-
 static GdkPixbuf *
 load_pixbuf_async_finish (StTextureCache *cache, GAsyncResult *result, GError **error)
 {
@@ -771,22 +557,6 @@ load_pixbuf_async_finish (StTextureCache *cache, GAsyncResult *result, GError **
     return NULL;
   return g_simple_async_result_get_op_res_gpointer (simple);
 }
-
-typedef struct {
-  StTextureCachePolicy policy;
-  char *key;
-  char *uri;
-  gboolean thumbnail;
-  gboolean enforced_square;
-  char *mimetype;
-  GtkRecentInfo *recent_info;
-  char *checksum;
-  GIcon *icon;
-  GtkIconInfo *icon_info;
-  guint width;
-  guint height;
-  GSList *textures;
-} AsyncTextureLoadData;
 
 static CoglHandle
 pixbuf_to_cogl_handle (GdkPixbuf *pixbuf,
@@ -853,45 +623,6 @@ pixbuf_to_cairo_surface (GdkPixbuf *pixbuf)
   return surface;
 }
 
-static GdkPixbuf *
-load_pixbuf_fallback(AsyncTextureLoadData *data)
-{
-  GdkPixbuf *pixbuf = NULL;
-
-  if (data->thumbnail)
-    {
-
-      GtkIconTheme *theme = gtk_icon_theme_get_default ();
-
-      if (data->recent_info)
-          pixbuf = gtk_recent_info_get_icon (data->recent_info, data->width);
-      else
-        {
-          GIcon *icon = icon_for_mimetype (data->mimetype);
-          if (icon != NULL)
-            {
-              GtkIconInfo *icon_info = gtk_icon_theme_lookup_by_gicon (theme,
-                                                                       icon,
-                                                                       data->width,
-                                                                       GTK_ICON_LOOKUP_USE_BUILTIN);
-              g_object_unref (icon);
-              if (icon_info != NULL)
-                pixbuf = gtk_icon_info_load_icon (icon_info, NULL);
-            }
-        }
-
-      if (pixbuf == NULL)
-        pixbuf = gtk_icon_theme_load_icon (theme,
-                                           "gtk-file",
-                                           data->width,
-                                           GTK_ICON_LOOKUP_USE_BUILTIN,
-                                           NULL);
-    }
-  /* Maybe we could need a fallback for outher image types? */
-
-  return pixbuf;
-}
-
 static void
 on_pixbuf_loaded (GObject      *source,
                   GAsyncResult *result,
@@ -910,8 +641,6 @@ on_pixbuf_loaded (GObject      *source,
   g_hash_table_remove (cache->priv->outstanding_requests, data->key);
 
   pixbuf = load_pixbuf_async_finish (cache, result, &error);
-  if (pixbuf == NULL)
-    pixbuf = load_pixbuf_fallback (data);
   if (pixbuf == NULL)
     goto out;
 
@@ -941,31 +670,21 @@ on_pixbuf_loaded (GObject      *source,
 out:
   if (texdata)
     cogl_handle_unref (texdata);
-  g_free (data->key);
 
-  if (data->icon)
-    {
-      gtk_icon_info_free (data->icon_info);
-      g_object_unref (data->icon);
-    }
-  else if (data->uri)
-    g_free (data->uri);
-
-  if (data->recent_info)
-    gtk_recent_info_unref (data->recent_info);
-  if (data->mimetype)
-    g_free (data->mimetype);
-
-  /* Alternatively we could weakref and just do nothing if the texture
-     is destroyed */
-  for (iter = data->textures; iter; iter = iter->next)
-    {
-      ClutterTexture *texture = iter->data;
-      g_object_unref (texture);
-    }
+  texture_load_data_destroy (data);
+  g_free (data);
 
   g_clear_error (&error);
-  g_free (data);
+}
+
+static void
+load_texture_async (StTextureCache       *cache,
+                    AsyncTextureLoadData *data)
+{
+  GSimpleAsyncResult *result;
+  result = g_simple_async_result_new (G_OBJECT (cache), on_pixbuf_loaded, data, load_texture_async);
+  g_simple_async_result_run_in_thread (result, load_pixbuf_thread, G_PRIORITY_DEFAULT, NULL);
+  g_object_unref (result);
 }
 
 typedef struct {
@@ -1111,13 +830,12 @@ st_texture_cache_load (StTextureCache       *cache,
 }
 
 /**
- * create_texture_and_ensure_request:
+ * ensure_request:
  * @cache:
  * @key: A cache key
- * @size: Size in pixels
  * @policy: Cache policy
  * @request: (out): If no request is outstanding, one will be created and returned here
- * @texture: (out): A new texture, also added to the request
+ * @texture: A texture to be added to the request
  *
  * Check for any outstanding load for the data represented by @key.  If there
  * is already a request pending, append it to that request to avoid loading
@@ -1126,26 +844,22 @@ st_texture_cache_load (StTextureCache       *cache,
  * Returns: %TRUE iff there is already a request pending
  */
 static gboolean
-create_texture_and_ensure_request (StTextureCache        *cache,
-                                   const char            *key,
-                                   guint                  size,
-                                   StTextureCachePolicy   policy,
-                                   AsyncTextureLoadData **request,
-                                   ClutterActor         **texture)
+ensure_request (StTextureCache        *cache,
+                const char            *key,
+                StTextureCachePolicy   policy,
+                AsyncTextureLoadData **request,
+                ClutterActor          *texture)
 {
   CoglHandle texdata;
   AsyncTextureLoadData *pending;
   gboolean had_pending;
-
-  *texture = (ClutterActor *) create_default_texture (cache);
-  clutter_actor_set_size (*texture, size, size);
 
   texdata = g_hash_table_lookup (cache->priv->keyed_cache, key);
 
   if (texdata != NULL)
     {
       /* We had this cached already, just set the texture and we're done. */
-      set_texture_cogl_texture (CLUTTER_TEXTURE (*texture), texdata);
+      set_texture_cogl_texture (CLUTTER_TEXTURE (texture), texdata);
       return TRUE;
     }
 
@@ -1163,7 +877,7 @@ create_texture_and_ensure_request (StTextureCache        *cache,
    *request = pending;
 
   /* Regardless of whether there was a pending request, prepend our texture here. */
-  (*request)->textures = g_slist_prepend ((*request)->textures, g_object_ref (*texture));
+  (*request)->textures = g_slist_prepend ((*request)->textures, g_object_ref (texture));
 
   return had_pending;
 }
@@ -1182,6 +896,13 @@ load_gicon_with_colors (StTextureCache    *cache,
   GtkIconInfo *info;
   StTextureCachePolicy policy;
 
+  /* Do theme lookups in the main thread to avoid thread-unsafety */
+  theme = cache->priv->icon_theme;
+
+  info = gtk_icon_theme_lookup_by_gicon (theme, icon, size, GTK_ICON_LOOKUP_USE_BUILTIN);
+  if (info == NULL)
+    return NULL;
+
   gicon_string = g_icon_to_string (icon);
   /* A return value of NULL indicates that the icon can not be serialized,
    * so don't have a unique identifier for it as a cache key, and thus can't
@@ -1192,7 +913,7 @@ load_gicon_with_colors (StTextureCache    *cache,
   if (colors)
     {
       /* This raises some doubts about the practice of using string keys */
-      key = g_strdup_printf (CACHE_PREFIX_GICON "icon=%s,size=%d,colors=%2x%2x%2x%2x,%2x%2x%2x%2x,%2x%2x%2x%2x,%2x%2x%2x%2x",
+      key = g_strdup_printf (CACHE_PREFIX_ICON "%s,size=%d,colors=%2x%2x%2x%2x,%2x%2x%2x%2x,%2x%2x%2x%2x,%2x%2x%2x%2x",
                              gicon_string, size,
                              colors->foreground.red, colors->foreground.blue, colors->foreground.green, colors->foreground.alpha,
                              colors->warning.red, colors->warning.blue, colors->warning.green, colors->warning.alpha,
@@ -1201,45 +922,33 @@ load_gicon_with_colors (StTextureCache    *cache,
     }
   else
     {
-      key = g_strdup_printf (CACHE_PREFIX_GICON "icon=%s,size=%d",
+      key = g_strdup_printf (CACHE_PREFIX_ICON "%s,size=%d",
                              gicon_string, size);
     }
   g_free (gicon_string);
 
-  if (create_texture_and_ensure_request (cache, key, size, policy, &request, &texture))
+  texture = (ClutterActor *) create_default_texture ();
+  clutter_actor_set_size (texture, size, size);
+
+  if (ensure_request (cache, key, policy, &request, texture))
     {
+      /* If there's an outstanding request, we've just added ourselves to it */
       g_free (key);
-      return texture;
     }
-
-  /* Do theme lookups in the main thread to avoid thread-unsafety */
-  theme = cache->priv->icon_theme;
-
-  info = gtk_icon_theme_lookup_by_gicon (theme, icon, size, GTK_ICON_LOOKUP_USE_BUILTIN);
-  if (info != NULL)
+  else
     {
+      /* Else, make a new request */
+
+      request->cache = cache;
       /* Transfer ownership of key */
       request->key = key;
       request->policy = policy;
-      request->icon = g_object_ref (icon);
+      request->colors = colors ? st_icon_colors_ref (colors) : NULL;
       request->icon_info = info;
       request->width = request->height = size;
       request->enforced_square = TRUE;
 
-      load_icon_pixbuf_async (cache, icon, info, size, colors, NULL, on_pixbuf_loaded, request);
-    }
-  else
-    {
-      /* Blah; we failed to find the icon, but we've added our texture to the outstanding
-       * requests.  In that case, just undo what create_texture_and_ensure_request() did.
-       */
-       g_slist_foreach (request->textures, (GFunc) g_object_unref, NULL);
-       g_slist_free (request->textures);
-       g_free (request);
-       g_hash_table_remove (cache->priv->outstanding_requests, key);
-       g_free (key);
-       g_object_unref (texture);
-       texture = NULL;
+      load_texture_async (cache, request);
     }
 
   return CLUTTER_ACTOR (texture);
@@ -1271,12 +980,6 @@ st_texture_cache_load_gicon (StTextureCache    *cache,
   return load_gicon_with_colors (cache, icon, size, theme_node ? st_theme_node_get_icon_colors (theme_node) : NULL);
 }
 
-typedef struct {
-  gchar *path;
-  gint   grid_width, grid_height;
-  ClutterGroup *group;
-} AsyncImageData;
-
 static ClutterActor *
 load_from_pixbuf (GdkPixbuf *pixbuf)
 {
@@ -1285,7 +988,7 @@ load_from_pixbuf (GdkPixbuf *pixbuf)
   int width = gdk_pixbuf_get_width (pixbuf);
   int height = gdk_pixbuf_get_height (pixbuf);
 
-  texture = create_default_texture (st_texture_cache_get_default ());
+  texture = create_default_texture ();
 
   clutter_actor_set_size (CLUTTER_ACTOR (texture), width, height);
 
@@ -1295,6 +998,21 @@ load_from_pixbuf (GdkPixbuf *pixbuf)
 
   cogl_handle_unref (texdata);
   return CLUTTER_ACTOR (texture);
+}
+
+typedef struct {
+  gchar *path;
+  gint   grid_width, grid_height;
+  ClutterActor *actor;
+} AsyncImageData;
+
+static void
+on_data_destroy (gpointer data)
+{
+  AsyncImageData *d = (AsyncImageData *)data;
+  g_free (d->path);
+  g_object_unref (d->actor);
+  g_free (d);
 }
 
 static void
@@ -1313,17 +1031,8 @@ on_sliced_image_loaded (GObject *source_object,
     {
       ClutterActor *actor = load_from_pixbuf (GDK_PIXBUF (list->data));
       clutter_actor_hide (actor);
-      clutter_container_add_actor (CLUTTER_CONTAINER (data->group), actor);
+      clutter_actor_add_child (data->actor, actor);
     }
-}
-
-static void
-on_data_destroy (gpointer data)
-{
-  AsyncImageData *d = (AsyncImageData *)data;
-  g_free (d->path);
-  g_object_unref (d->group);
-  g_free (d);
 }
 
 static void
@@ -1357,9 +1066,9 @@ load_sliced_image (GSimpleAsyncResult *result,
 
   width = gdk_pixbuf_get_width (pix);
   height = gdk_pixbuf_get_height (pix);
-  for (y = 0; y < height; y += data->grid_width)
+  for (y = 0; y < height; y += data->grid_height)
     {
-      for (x = 0; x < width; x += data->grid_height)
+      for (x = 0; x < width; x += data->grid_width)
         {
           GdkPixbuf *pixbuf = gdk_pixbuf_new_subpixbuf (pix, x, y, data->grid_width, data->grid_height);
           g_assert (pixbuf != NULL);
@@ -1384,9 +1093,9 @@ load_sliced_image (GSimpleAsyncResult *result,
  * note that the dimensions of the image loaded from @path 
  * should be a multiple of the specified grid dimensions.
  *
- * Returns: (transfer none): A new ClutterGroup
+ * Returns: (transfer none): A new #ClutterActor
  */
-ClutterGroup *
+ClutterActor *
 st_texture_cache_load_sliced_image (StTextureCache    *cache,
                                     const gchar       *path,
                                     gint               grid_width,
@@ -1394,14 +1103,14 @@ st_texture_cache_load_sliced_image (StTextureCache    *cache,
 {
   AsyncImageData *data;
   GSimpleAsyncResult *result;
-  ClutterGroup *group = CLUTTER_GROUP (clutter_group_new ());
+  ClutterActor *actor = clutter_actor_new ();
 
   data = g_new0 (AsyncImageData, 1);
   data->grid_width = grid_width;
   data->grid_height = grid_height;
   data->path = g_strdup (path);
-  data->group = group;
-  g_object_ref (G_OBJECT (group));
+  data->actor = actor;
+  g_object_ref (G_OBJECT (actor));
 
   result = g_simple_async_result_new (G_OBJECT (cache), on_sliced_image_loaded, data, st_texture_cache_load_sliced_image);
 
@@ -1410,29 +1119,19 @@ st_texture_cache_load_sliced_image (StTextureCache    *cache,
 
   g_object_unref (result);
 
-  return group;
+  return actor;
 }
 
 /**
  * StIconType:
  * @ST_ICON_SYMBOLIC: a symbolic (ie, mostly monochrome) icon
  * @ST_ICON_FULLCOLOR: a full-color icon
- * @ST_ICON_APPLICATION: a full-color icon, which is expected
- *   to be an application icon
- * @ST_ICON_DOCUMENT: a full-color icon, which is expected
- *   to be a document (MIME type) icon
  *
  * Describes what style of icon is desired in a call to
  * st_texture_cache_load_icon_name() or st_texture_cache_load_gicon().
  * Use %ST_ICON_SYMBOLIC for symbolic icons (eg, for the panel and
  * much of the rest of the shell chrome) or %ST_ICON_FULLCOLOR for a
  * full-color icon.
- *
- * If you know that the requested icon is either an application icon
- * or a document type icon, you should use %ST_ICON_APPLICATION or
- * %ST_ICON_DOCUMENT, which may do a better job of selecting the
- * correct theme icon for those types. If you are unsure what kind of
- * icon you are loading, use %ST_ICON_FULLCOLOR.
  */
 
 /* generates names like g_themed_icon_new_with_default_fallbacks(),
@@ -1481,7 +1180,7 @@ symbolic_names_for_icon (const char *name)
  * @theme_node: (allow-none): a #StThemeNode
  * @name: Name of a themed icon
  * @icon_type: the type of icon to load
- * @size: Size of themed
+ * @size: Size of themed icon
  *
  * Load a themed icon into a texture. See the #StIconType documentation
  * for an explanation of how @icon_type affects the returned icon. The
@@ -1504,31 +1203,6 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
 
   switch (icon_type)
     {
-    case ST_ICON_APPLICATION:
-      themed = g_themed_icon_new (name);
-      texture = load_gicon_with_colors (cache, themed, size, NULL);
-      g_object_unref (themed);
-      if (texture == NULL)
-        {
-          themed = g_themed_icon_new ("application-x-executable");
-          texture = load_gicon_with_colors (cache, themed, size, NULL);
-          g_object_unref (themed);
-        }
-      return CLUTTER_ACTOR (texture);
-      break;
-    case ST_ICON_DOCUMENT:
-      themed = g_themed_icon_new (name);
-      texture = load_gicon_with_colors (cache, themed, size, NULL);
-      g_object_unref (themed);
-      if (texture == NULL)
-        {
-          themed = g_themed_icon_new ("x-office-document");
-          texture = load_gicon_with_colors (cache, themed, size, NULL);
-          g_object_unref (themed);
-        }
-
-      return CLUTTER_ACTOR (texture);
-      break;
     case ST_ICON_SYMBOLIC:
       names = symbolic_names_for_icon (name);
       themed = g_themed_icon_new_from_names (names, -1);
@@ -1536,8 +1210,16 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
       texture = load_gicon_with_colors (cache, themed, size,
                                         st_theme_node_get_icon_colors (theme_node));
       g_object_unref (themed);
+      if (texture == NULL)
+        {
+          /* We don't have an equivalent of image-missing
+           * for the symbolic icon theme, so just create a blank
+           * actor. */
+          texture = (ClutterActor *) create_default_texture ();
+          clutter_actor_set_size (texture, size, size);
+        }
 
-      return CLUTTER_ACTOR (texture);
+      return texture;
       break;
     case ST_ICON_FULLCOLOR:
       themed = g_themed_icon_new_with_default_fallbacks (name);
@@ -1549,8 +1231,7 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
           texture = load_gicon_with_colors (cache, themed, size, NULL);
           g_object_unref (themed);
         }
-
-      return CLUTTER_ACTOR (texture);
+      return texture;
       break;
     default:
       g_assert_not_reached ();
@@ -1559,7 +1240,6 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
 
 /**
  * st_texture_cache_load_uri_async:
- *
  * @cache: The texture cache instance
  * @uri: uri of the image file from which to create a pixbuf
  * @available_width: available width for the image, can be -1 if not limited
@@ -1577,19 +1257,36 @@ st_texture_cache_load_uri_async (StTextureCache *cache,
                                  int             available_width,
                                  int             available_height)
 {
-  ClutterTexture *texture;
-  AsyncTextureLoadData *data;
+  ClutterActor *texture;
+  AsyncTextureLoadData *request;
+  StTextureCachePolicy policy;
+  gchar *key;
 
-  texture = create_default_texture (cache);
+  key = g_strconcat (CACHE_PREFIX_URI, uri, NULL);
 
-  data = g_new0 (AsyncTextureLoadData, 1);
-  data->key = g_strconcat (CACHE_PREFIX_URI, uri, NULL);
-  data->policy = ST_TEXTURE_CACHE_POLICY_NONE;
-  data->uri = g_strdup (uri);
-  data->width = available_width;
-  data->height = available_height;
-  data->textures = g_slist_prepend (data->textures, g_object_ref (texture));
-  load_uri_pixbuf_async (cache, uri, available_width, available_height, NULL, on_pixbuf_loaded, data);
+  policy = ST_TEXTURE_CACHE_POLICY_NONE; /* XXX */
+
+  texture = (ClutterActor *) create_default_texture ();
+
+  if (ensure_request (cache, key, policy, &request, texture))
+    {
+      /* If there's an outstanding request, we've just added ourselves to it */
+      g_free (key);
+    }
+  else
+    {
+      /* Else, make a new request */
+
+      request->cache = cache;
+      /* Transfer ownership of key */
+      request->key = key;
+      request->uri = g_strdup (uri);
+      request->policy = policy;
+      request->width = available_width;
+      request->height = available_height;
+
+      load_texture_async (cache, request);
+    }
 
   return CLUTTER_ACTOR (texture);
 }
@@ -1673,47 +1370,6 @@ out:
 }
 
 /**
- * st_texture_cache_load_uri_sync:
- *
- * @cache: The texture cache instance
- * @policy: Requested lifecycle of cached data
- * @uri: uri of the image file from which to create a pixbuf
- * @available_width: available width for the image, can be -1 if not limited
- * @available_height: available height for the image, can be -1 if not limited
- * @error: Return location for error
- *
- * Synchronously load an image from a uri.  The image is scaled down to fit the
- * available width and height imensions, but the image is never scaled up beyond
- * its actual size. The pixbuf is rotated according to the associated orientation
- * setting.
- *
- * Return value: (transfer none): A new #ClutterActor with the image file loaded if it was
- *               generated succesfully, %NULL otherwise
- */
-ClutterActor *
-st_texture_cache_load_uri_sync (StTextureCache *cache,
-                                StTextureCachePolicy policy,
-                                const gchar       *uri,
-                                int                available_width,
-                                int                available_height,
-                                GError            **error)
-{
-  CoglHandle texdata;
-  ClutterTexture *texture;
-
-  texdata = st_texture_cache_load_uri_sync_to_cogl_texture (cache, policy, uri, available_width, available_height, error);
-
-  if (texdata == COGL_INVALID_HANDLE)
-    return NULL;
-
-  texture = create_default_texture (cache);
-  set_texture_cogl_texture (texture, texdata);
-  cogl_handle_unref (texdata);
-
-  return CLUTTER_ACTOR (texture);
-}
-
-/**
  * st_texture_cache_load_file_to_cogl_texture:
  * @cache: A #StTextureCache
  * @file_path: Path to a file in supported image format
@@ -1759,7 +1415,7 @@ st_texture_cache_load_file_to_cogl_texture (StTextureCache *cache,
  * into a cairo surface.  On error, a warning is emitted
  * and %NULL is returned.
  *
- * Returns: (transfer full): a new #cairo_surface_t *
+ * Returns: (transfer full): a new #cairo_surface_t
  */
 cairo_surface_t *
 st_texture_cache_load_file_to_cairo_surface (StTextureCache *cache,
@@ -1785,100 +1441,6 @@ st_texture_cache_load_file_to_cairo_surface (StTextureCache *cache,
       return NULL;
     }
   return surface;
-}
-
-/**
- * st_texture_cache_load_file_simple:
- * @cache: A #StTextureCache
- * @file_path: Filesystem path
- *
- * Synchronously load an image into a texture.  The texture will be cached
- * indefinitely.  On error, this function returns an empty texture and prints a warning.
- *
- * Returns: (transfer none): A new #ClutterTexture
- */
-ClutterActor *
-st_texture_cache_load_file_simple (StTextureCache *cache,
-                                   const gchar    *file_path)
-{
-  GFile *file;
-  char *uri;
-  ClutterActor *texture;
-  GError *error = NULL;
-
-  file = g_file_new_for_path (file_path);
-  uri = g_file_get_uri (file);
-
-  texture = st_texture_cache_load_uri_sync (cache, ST_TEXTURE_CACHE_POLICY_FOREVER,
-                                            uri, -1, -1, &error);
-  if (texture == NULL)
-    {
-      g_warning ("Failed to load %s: %s", file_path, error->message);
-      g_clear_error (&error);
-      texture = clutter_texture_new ();
-    }
-  return texture;
-}
-
-/**
- * st_texture_cache_load_from_data:
- * @cache: The texture cache instance
- * @data: Image data in PNG, GIF, etc format
- * @len: length of @data
- * @size: Size in pixels to use for the resulting texture
- * @error: Return location for error
- *
- * Synchronously creates an image from @data. The image is scaled down
- * to fit the available width and height dimensions, but the image is
- * never scaled up beyond its actual size. The pixbuf is rotated
- * according to the associated orientation setting.
- *
- * Return value: (transfer none): A new #ClutterActor with the image data loaded if it was
- *               generated succesfully, %NULL otherwise
- */
-ClutterActor *
-st_texture_cache_load_from_data (StTextureCache    *cache,
-                                 const guchar      *data,
-                                 gsize              len,
-                                 int                size,
-                                 GError           **error)
-{
-  ClutterTexture *texture;
-  CoglHandle texdata;
-  GdkPixbuf *pixbuf;
-  char *key;
-  char *checksum;
-
-  texture = create_default_texture (cache);
-  clutter_actor_set_size (CLUTTER_ACTOR (texture), size, size);
-
-  checksum = g_compute_checksum_for_data (G_CHECKSUM_SHA1, data, len);
-  key = g_strdup_printf (CACHE_PREFIX_COMPRESSED_CHECKSUM "checksum=%s,size=%d", checksum, size);
-  g_free (checksum);
-
-  texdata = g_hash_table_lookup (cache->priv->keyed_cache, key);
-  if (texdata == NULL)
-    {
-      pixbuf = impl_load_pixbuf_data (data, len, size, size, error);
-      if (!pixbuf)
-        {
-          g_object_unref (texture);
-          g_free (key);
-          return NULL;
-        }
-
-      texdata = pixbuf_to_cogl_handle (pixbuf, TRUE);
-      g_object_unref (pixbuf);
-
-      set_texture_cogl_texture (texture, texdata);
-
-      g_hash_table_insert (cache->priv->keyed_cache, g_strdup (key), texdata);
-    }
-
-  g_free (key);
-
-  set_texture_cogl_texture (texture, texdata);
-  return CLUTTER_ACTOR (texture);
 }
 
 /**
@@ -1913,7 +1475,7 @@ st_texture_cache_load_from_raw (StTextureCache    *cache,
   char *key;
   char *checksum;
 
-  texture = create_default_texture (cache);
+  texture = create_default_texture ();
   clutter_actor_set_size (CLUTTER_ACTOR (texture), size, size);
 
   /* In theory, two images of with different width and height could have the same
@@ -1939,209 +1501,6 @@ st_texture_cache_load_from_raw (StTextureCache    *cache,
 
   set_texture_cogl_texture (texture, texdata);
   return CLUTTER_ACTOR (texture);
-}
-
-/**
- * st_texture_cache_load_thumbnail:
- * @cache:
- * @size: Size in pixels to use for thumbnail
- * @uri: Source URI
- * @mimetype: Source mime type
- *
- * Asynchronously load a thumbnail image of a URI into a texture.  The
- * returned texture object will be a new instance; however, its texture data
- * may be shared with other objects.  This implies the texture data is cached.
- *
- * The current caching policy is permanent; to uncache, you must explicitly
- * call st_texture_cache_unref_thumbnail().
- *
- * Returns: (transfer none): A new #ClutterActor
- */
-ClutterActor *
-st_texture_cache_load_thumbnail (StTextureCache    *cache,
-                                 int                size,
-                                 const char        *uri,
-                                 const char        *mimetype)
-{
-  ClutterTexture *texture;
-  AsyncTextureLoadData *data;
-  char *key;
-  CoglHandle texdata;
-
-  /* Don't attempt to load thumbnails for non-local URIs */
-  if (!g_str_has_prefix (uri, "file://"))
-    {
-      GIcon *icon = icon_for_mimetype (mimetype);
-      return st_texture_cache_load_gicon (cache, NULL, icon, size);
-    }
-
-  texture = create_default_texture (cache);
-  clutter_actor_set_size (CLUTTER_ACTOR (texture), size, size);
-
-  key = g_strdup_printf (CACHE_PREFIX_THUMBNAIL_URI "uri=%s,size=%d", uri, size);
-
-  texdata = g_hash_table_lookup (cache->priv->keyed_cache, key);
-  if (!texdata)
-    {
-      data = g_new0 (AsyncTextureLoadData, 1);
-      data->key = g_strdup (key);
-      data->policy = ST_TEXTURE_CACHE_POLICY_FOREVER;
-      data->uri = g_strdup (uri);
-      data->mimetype = g_strdup (mimetype);
-      data->thumbnail = TRUE;
-      data->width = size;
-      data->height = size;
-      data->enforced_square = TRUE;
-      data->textures = g_slist_prepend (data->textures, g_object_ref (texture));
-      load_thumbnail_async (cache, uri, mimetype, size, NULL, on_pixbuf_loaded, data);
-    }
-  else
-    {
-      set_texture_cogl_texture (texture, texdata);
-    }
-
-  g_free (key);
-  return CLUTTER_ACTOR (texture);
-}
-
-static GIcon *
-icon_for_recent (GtkRecentInfo *info)
-{
-  const char *mimetype;
-
-  mimetype = gtk_recent_info_get_mime_type (info);
-  if (!mimetype)
-    {
-      return g_themed_icon_new (GTK_STOCK_FILE);
-    }
-
-  return icon_for_mimetype (mimetype);
-}
-
-/**
- * st_texture_cache_load_recent_thumbnail:
- * @cache:
- * @size: Size in pixels to use for thumbnail
- * @info: Recent item info
- *
- * Asynchronously load a thumbnail image of a #GtkRecentInfo into a texture.  The
- * returned texture object will be a new instance; however, its texture data
- * may be shared with other objects.  This implies the texture data is cached.
- *
- * The current caching policy is permanent; to uncache, you must explicitly
- * call st_texture_cache_unref_recent_thumbnail().
- *
- * Returns: (transfer none): A new #ClutterActor
- */
-ClutterActor *
-st_texture_cache_load_recent_thumbnail (StTextureCache    *cache,
-                                        int                size,
-                                        GtkRecentInfo     *info)
-{
-  ClutterTexture *texture;
-  AsyncTextureLoadData *data;
-  char *key;
-  CoglHandle texdata;
-  const char *uri;
-
-  uri = gtk_recent_info_get_uri (info);
-
-  /* Don't attempt to load thumbnails for non-local URIs */
-  if (!g_str_has_prefix (uri, "file://"))
-    {
-      GIcon *icon = icon_for_recent (info);
-      return st_texture_cache_load_gicon (cache, NULL, icon, size);
-    }
-
-  texture = CLUTTER_TEXTURE (clutter_texture_new ());
-  clutter_actor_set_size (CLUTTER_ACTOR (texture), size, size);
-
-  key = g_strdup_printf (CACHE_PREFIX_THUMBNAIL_URI "uri=%s,size=%d", uri, size);
-
-  texdata = g_hash_table_lookup (cache->priv->keyed_cache, key);
-  if (!texdata)
-    {
-      data = g_new0 (AsyncTextureLoadData, 1);
-      data->key = g_strdup (key);
-      data->policy = ST_TEXTURE_CACHE_POLICY_FOREVER;
-      data->thumbnail = TRUE;
-      data->recent_info = gtk_recent_info_ref (info);
-      data->width = size;
-      data->height = size;
-      data->enforced_square = TRUE;
-      data->textures = g_slist_prepend (data->textures, g_object_ref (texture));
-      load_recent_thumbnail_async (cache, info, size, NULL, on_pixbuf_loaded, data);
-    }
-  else
-    {
-      set_texture_cogl_texture (texture, texdata);
-    }
-
-  g_free (key);
-  return CLUTTER_ACTOR (texture);
-}
-
-/**
- * st_texture_cache_evict_thumbnail:
- * @cache:
- * @uri: Source URI
- *
- * Removes all references added by st_texture_cache_load_thumbnail() function
- * created for the given URI.
- */
-void
-st_texture_cache_evict_thumbnail (StTextureCache    *cache,
-                                  const char        *uri)
-{
-  char *target_key;
-
-  target_key = g_strconcat (CACHE_PREFIX_THUMBNAIL_URI, uri, NULL);
-  g_hash_table_remove (cache->priv->keyed_cache, target_key);
-  g_free (target_key);
-}
-
-/**
- * st_texture_cache_evict_recent_thumbnail:
- * @cache:
- * @info: A recent info
- *
- * Removes all references added by st_texture_cache_load_recent_thumbnail() function
- * for the URI associated with the given @info.
- */
-void
-st_texture_cache_evict_recent_thumbnail (StTextureCache *cache,
-                                         GtkRecentInfo  *info)
-{
-  st_texture_cache_evict_thumbnail (cache, gtk_recent_info_get_uri (info));
-}
-
-static size_t
-pixbuf_byte_size (GdkPixbuf *pixbuf)
-{
-  /* This bit translated from gtk+/gdk-pixbuf/gdk-pixbuf.c:gdk_pixbuf_copy.  The comment
-   * there was:
-   *
-   * Calculate a semi-exact size.  Here we copy with full rowstrides;
-   * maybe we should copy each row individually with the minimum
-   * rowstride?
-   */
-  return (gdk_pixbuf_get_height (pixbuf) - 1) * gdk_pixbuf_get_rowstride (pixbuf) +
-    + gdk_pixbuf_get_width (pixbuf) * ((gdk_pixbuf_get_n_channels (pixbuf)* gdk_pixbuf_get_bits_per_sample (pixbuf) + 7) / 8);
-}
-
-/**
- * st_texture_cache_pixbuf_equal:
- *
- * Returns: %TRUE iff the given pixbufs are bytewise-equal
- */
-gboolean
-st_texture_cache_pixbuf_equal (StTextureCache *cache, GdkPixbuf *a, GdkPixbuf *b)
-{
-  size_t size_a = pixbuf_byte_size (a);
-  size_t size_b = pixbuf_byte_size (b);
-  if (size_a != size_b)
-    return FALSE;
-  return memcmp (gdk_pixbuf_get_pixels (a), gdk_pixbuf_get_pixels (b), size_a) == 0;
 }
 
 static StTextureCache *instance = NULL;

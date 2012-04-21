@@ -2,6 +2,9 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+#include <sys/wait.h>
+
 #include "shell-util.h"
 #include <glib/gi18n-lib.h>
 #include <gtk/gtk.h>
@@ -13,6 +16,11 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+
+#ifdef WITH_SYSTEMD
+#include <systemd/sd-daemon.h>
+#include <systemd/sd-login.h>
+#endif
 
 /* Some code in this file adapted under the GPLv2+ from:
  *
@@ -75,8 +83,6 @@ shell_util_get_file_display_name_if_mount (GFile *file)
   return ret;
 }
 
-#define HOME_NAME_SCHEMA        "org.gnome.nautilus.desktop"
-#define HOME_NAME_KEY           "home-icon-name"
 static char *
 shell_util_get_file_display_for_common_files (GFile *file)
 {
@@ -85,26 +91,11 @@ shell_util_get_file_display_for_common_files (GFile *file)
   compare = g_file_new_for_path (g_get_home_dir ());
   if (g_file_equal (file, compare))
     {
-      GSettings *settings;
-      char *name;
-
       g_object_unref (compare);
-
-      settings = g_settings_new (HOME_NAME_SCHEMA);
-      name = g_settings_get_string (settings, HOME_NAME_KEY);
-      g_object_unref (settings);
-
-      if (!(name && name[0]))
-        {
-          g_free (name);
-          return g_strdup (_("Home Folder"));
-        }
-      else
-        {
-          return name;
-        }
+      /* Translators: this is the same string as the one found in
+       * nautilus */
+      return g_strdup (_("Home"));
     }
-  g_object_unref (compare);
 
   compare = g_file_new_for_path ("/");
   if (g_file_equal (file, compare))
@@ -602,25 +593,6 @@ shell_util_get_week_start ()
 }
 
 /**
- * shell_get_event_state:
- * @event: a #ClutterEvent
- *
- * Gets the current state of the event (the set of modifier keys that
- * are pressed down). Thhis is a wrapper around
- * clutter_event_get_state() that strips out any un-declared modifier
- * flags, to make gjs happy; see
- * https://bugzilla.gnome.org/show_bug.cgi?id=597292.
- *
- * Return value: the state from the event
- */
-ClutterModifierType
-shell_get_event_state (ClutterEvent *event)
-{
-  ClutterModifierType state = clutter_event_get_state (event);
-  return state & CLUTTER_MODIFIER_MASK;
-}
-
-/**
  * shell_write_soup_message_to_stream:
  * @stream: a #GOutputStream
  * @message: a #SoupMessage
@@ -693,18 +665,6 @@ shell_get_file_contents_utf8_sync (const char *path,
       return NULL;
     }
   return contents;
-}
-
-/**
- * shell_breakpoint:
- *
- * Using G_BREAKPOINT(), interrupt the current process.  This is useful
- * in conjunction with a debugger such as gdb.
- */
-void
-shell_breakpoint (void)
-{
-  G_BREAKPOINT ();
 }
 
 /**
@@ -861,4 +821,50 @@ shell_shader_effect_set_double_uniform (ClutterShaderEffect *effect,
   clutter_shader_effect_set_uniform_value (effect,
                                            name,
                                            &gvalue);
+}
+
+/**
+ * shell_session_is_active_for_systemd:
+ *
+ * Checks whether the session we are running in is currently active,
+ * i.e. in the foreground and ready for user input.
+ *
+ * Returns: TRUE if session is active
+ */
+gboolean
+shell_session_is_active_for_systemd (void)
+{
+  /* If this isn't systemd, let's assume the session is active. */
+
+#ifdef WITH_SYSTEMD
+  if (sd_booted () <= 0)
+    return TRUE;
+
+  return sd_session_is_active (NULL) != 0;
+#else
+  return TRUE;
+#endif
+}
+
+/**
+ * shell_util_wifexited:
+ * @status: the status returned by wait() or waitpid()
+ * @exit: (out): the actual exit status of the process
+ *
+ * Implements libc standard WIFEXITED, that cannot be used JS
+ * code.
+ * Returns: TRUE if the process exited normally, FALSE otherwise
+ */
+gboolean
+shell_util_wifexited (int  status,
+                      int *exit)
+{
+  gboolean ret;
+
+  ret = WIFEXITED(status);
+
+  if (ret)
+    *exit = WEXITSTATUS(status);
+
+  return ret;
 }

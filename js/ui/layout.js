@@ -8,6 +8,7 @@ const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 const St = imports.gi.St;
 
+const DND = imports.ui.dnd;
 const Main = imports.ui.main;
 const Params = imports.misc.params;
 const ScreenSaver = imports.misc.screenSaver;
@@ -17,13 +18,11 @@ const HOT_CORNER_ACTIVATION_TIMEOUT = 0.5;
 const STARTUP_ANIMATION_TIME = 0.2;
 const KEYBOARD_ANIMATION_TIME = 0.5;
 
-function LayoutManager() {
-    this._init.apply(this, arguments);
-}
+const LayoutManager = new Lang.Class({
+    Name: 'LayoutManager',
 
-LayoutManager.prototype = {
     _init: function () {
-        this._rtl = (St.Widget.get_default_direction() == St.TextDirection.RTL);
+        this._rtl = (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL);
         this.monitors = [];
         this.primaryMonitor = null;
         this.primaryIndex = -1;
@@ -374,7 +373,7 @@ LayoutManager.prototype = {
     findMonitorForActor: function(actor) {
         return this._chrome.findMonitorForActor(actor);
     }
-};
+});
 Signals.addSignalMethods(LayoutManager.prototype);
 
 
@@ -382,11 +381,9 @@ Signals.addSignalMethods(LayoutManager.prototype);
 //
 // This class manages a "hot corner" that can toggle switching to
 // overview.
-function HotCorner() {
-    this._init();
-}
+const HotCorner = new Lang.Class({
+    Name: 'HotCorner',
 
-HotCorner.prototype = {
     _init : function() {
         // We use this flag to mark the case where the user has entered the
         // hot corner and has not left both the hot corner and a surrounding
@@ -408,7 +405,7 @@ HotCorner.prototype = {
 
         this.actor.add_actor(this._corner);
 
-        if (St.Widget.get_default_direction() == St.TextDirection.RTL) {
+        if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL) {
             this._corner.set_position(this.actor.width - this._corner.width, 0);
             this.actor.set_anchor_point_from_gravity(Clutter.Gravity.NORTH_EAST);
         } else {
@@ -437,9 +434,9 @@ HotCorner.prototype = {
                              Lang.bind(this, this._onCornerLeft));
 
         // Cache the three ripples instead of dynamically creating and destroying them.
-        this._ripple1 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0 });
-        this._ripple2 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0 });
-        this._ripple3 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0 });
+        this._ripple1 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0, visible: false });
+        this._ripple2 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0, visible: false });
+        this._ripple3 = new St.BoxLayout({ style_class: 'ripple-box', opacity: 0, visible: false });
 
         Main.uiGroup.add_actor(this._ripple1);
         Main.uiGroup.add_actor(this._ripple2);
@@ -460,7 +457,7 @@ HotCorner.prototype = {
 
         ripple._opacity = startOpacity;
 
-        if (ripple.get_direction() == St.TextDirection.RTL)
+        if (ripple.get_text_direction() == Clutter.TextDirection.RTL)
             ripple.set_anchor_point_from_gravity(Clutter.Gravity.NORTH_EAST);
 
         ripple.visible = true;
@@ -494,13 +491,15 @@ HotCorner.prototype = {
 
     handleDragOver: function(source, actor, x, y, time) {
         if (source != Main.xdndHandler)
-            return;
+            return DND.DragMotionResult.CONTINUE;
 
         if (!Main.overview.visible && !Main.overview.animationInProgress) {
             this.rippleAnimation();
             Main.overview.showTemporarily();
             Main.overview.beginItemDrag(actor);
         }
+
+        return DND.DragMotionResult.CONTINUE;
     },
 
     _onCornerEntered : function() {
@@ -548,7 +547,7 @@ HotCorner.prototype = {
             return true;
         return false;
     }
-};
+});
 
 
 // This manages the shell "chrome"; the UI that's visible in the
@@ -561,11 +560,9 @@ const defaultParams = {
     affectsInputRegion: true
 };
 
-function Chrome() {
-    this._init.apply(this, arguments);
-}
+const Chrome = new Lang.Class({
+    Name: 'Chrome',
 
-Chrome.prototype = {
     _init: function(layoutManager) {
         this._layoutManager = layoutManager;
 
@@ -587,12 +584,13 @@ Chrome.prototype = {
 
         this._screenSaverActive = false;
         this._screenSaverProxy = new ScreenSaver.ScreenSaverProxy();
-        this._screenSaverProxy.connect('ActiveChanged', Lang.bind(this, this._onScreenSaverActiveChanged));
-        this._screenSaverProxy.GetActiveRemote(Lang.bind(this,
-            function(result, err) {
-                if (!err)
-                    this._onScreenSaverActiveChanged(this._screenSaverProxy, result);
-            }));
+        this._screenSaverProxy.connectSignal('ActiveChanged', Lang.bind(this, function(proxy, senderName, [isActive]) {
+            this._onScreenSaverActiveChanged(isActive);
+        }));
+        this._screenSaverProxy.GetActiveRemote(Lang.bind(this, function(result, err) {
+            if (!err)
+                this._onScreenSaverActiveChanged(result[0]);
+        }));
 
         this._relayout();
     },
@@ -733,7 +731,7 @@ Chrome.prototype = {
         this._queueUpdateRegions();
     },
 
-    _onScreenSaverActiveChanged: function(proxy, screenSaverActive) {
+    _onScreenSaverActiveChanged: function(screenSaverActive) {
         this._screenSaverActive = screenSaverActive;
         this._updateVisibility();
         this._queueUpdateRegions();
@@ -980,4 +978,4 @@ Chrome.prototype = {
 
         return false;
     }
-};
+});

@@ -1,11 +1,12 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Lang = imports.lang;
-const DBus = imports.dbus;
 const Mainloop = imports.mainloop;
+const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
 const Params = imports.misc.params;
 
+const Shell = imports.gi.Shell;
 const Main = imports.ui.main;
 const ShellMountOperation = imports.ui.shellMountOperation;
 const ScreenSaver = imports.misc.screenSaver;
@@ -16,79 +17,75 @@ const SETTING_ENABLE_AUTOMOUNT = 'automount';
 
 const AUTORUN_EXPIRE_TIMEOUT_SECS = 10;
 
-const ConsoleKitSessionIface = {
-    name: 'org.freedesktop.ConsoleKit.Session',
-    methods: [{ name: 'IsActive',
-                inSignature: '',
-                outSignature: 'b' }],
-    signals: [{ name: 'ActiveChanged',
-                inSignature: 'b' }]
-};
+const ConsoleKitSessionIface = <interface name="org.freedesktop.ConsoleKit.Session">
+<method name="IsActive">
+    <arg type="b" direction="out" />
+</method>
+<signal name="ActiveChanged">
+    <arg type="b" direction="out" />
+</signal>
+</interface>;
 
-const ConsoleKitSessionProxy = DBus.makeProxyClass(ConsoleKitSessionIface);
+const ConsoleKitSessionProxy = Gio.DBusProxy.makeProxyWrapper(ConsoleKitSessionIface);
 
-const ConsoleKitManagerIface = {
-    name: 'org.freedesktop.ConsoleKit.Manager',
-    methods: [{ name: 'GetCurrentSession',
-                inSignature: '',
-                outSignature: 'o' }]
-};
+const ConsoleKitManagerIface = <interface name="org.freedesktop.ConsoleKit.Manager">
+<method name="GetCurrentSession">
+    <arg type="o" direction="out" />
+</method>
+</interface>;
+
+const ConsoleKitManagerInfo = Gio.DBusInterfaceInfo.new_for_xml(ConsoleKitManagerIface);
 
 function ConsoleKitManager() {
-    this._init();
-};
+    var self = new Gio.DBusProxy({ g_connection: Gio.DBus.system,
+				   g_interface_name: ConsoleKitManagerInfo.name,
+				   g_interface_info: ConsoleKitManagerInfo,
+				   g_name: 'org.freedesktop.ConsoleKit',
+				   g_object_path: '/org/freedesktop/ConsoleKit/Manager',
+                                   g_flags: (Gio.DBusProxyFlags.DO_NOT_AUTO_START |
+                                             Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES) });
 
-ConsoleKitManager.prototype = {
-    _init: function() {
-        this.sessionActive = true;
+    self._updateSessionActive = function() {
+        if (self.g_name_owner) {
+            self.GetCurrentSessionRemote(function([session]) {
+                self._ckSession = new ConsoleKitSessionProxy(Gio.DBus.system, 'org.freedesktop.ConsoleKit', session);
 
-        DBus.system.proxifyObject(this,
-                                  'org.freedesktop.ConsoleKit',
-                                  '/org/freedesktop/ConsoleKit/Manager');
+                self._ckSession.connectSignal('ActiveChanged', function(object, senderName, [isActive]) {
+                    self.sessionActive = isActive;
+                });
+                self._ckSession.IsActiveRemote(function([isActive]) {
+                    self.sessionActive = isActive;
+                });
+            });
+        } else {
+            self.sessionActive = true;
+        }
+    };
+    self.connect('notify::g-name-owner',
+                 Lang.bind(self, self._updateSessionActive));
 
-        DBus.system.watch_name('org.freedesktop.ConsoleKit',
-                               false, // do not launch a name-owner if none exists
-                               Lang.bind(this, this._onManagerAppeared),
-                               Lang.bind(this, this._onManagerVanished));
-    },
-
-    _onManagerAppeared: function(owner) {
-        this.GetCurrentSessionRemote(Lang.bind(this, this._onCurrentSession));
-    },
-
-    _onManagerVanished: function(oldOwner) {
-        this.sessionActive = true;
-    },
-
-    _onCurrentSession: function(session) {
-        this._ckSession = new ConsoleKitSessionProxy(DBus.system, 'org.freedesktop.ConsoleKit', session);
-
-        this._ckSession.connect
-            ('ActiveChanged', Lang.bind(this, function(object, isActive) {
-                this.sessionActive = isActive;            
-            }));
-        this._ckSession.IsActiveRemote(Lang.bind(this, function(isActive) {
-            this.sessionActive = isActive;            
-        }));
-    }
-};
-DBus.proxifyPrototype(ConsoleKitManager.prototype, ConsoleKitManagerIface);
-
-function AutomountManager() {
-    this._init();
+    self._updateSessionActive();
+    self.init(null);
+    return self;
 }
 
-AutomountManager.prototype = {
+function haveSystemd() {
+    return GLib.access("/sys/fs/cgroup/systemd", 0) >= 0;
+}
+
+const AutomountManager = new Lang.Class({
+    Name: 'AutomountManager',
+
     _init: function() {
         this._settings = new Gio.Settings({ schema: SETTINGS_SCHEMA });
         this._volumeQueue = [];
 
-        this.ckListener = new ConsoleKitManager();
+        if (!haveSystemd())
+            this.ckListener = new ConsoleKitManager();
 
         this._ssProxy = new ScreenSaver.ScreenSaverProxy();
-        this._ssProxy.connect('ActiveChanged',
-                              Lang.bind(this,
-                                        this._screenSaverActiveChanged));
+        this._ssProxy.connectSignal('ActiveChanged',
+                                    Lang.bind(this, this._screenSaverActiveChanged));
 
         this._volumeMonitor = Gio.VolumeMonitor.get();
 
@@ -111,7 +108,7 @@ AutomountManager.prototype = {
         Mainloop.idle_add(Lang.bind(this, this._startupMountAll));
     },
 
-    _screenSaverActiveChanged: function(object, isActive) {
+    _screenSaverActiveChanged: function(object, senderName, [isActive]) {
         if (!isActive) {
             this._volumeQueue.forEach(Lang.bind(this, function(volume) {
                 this._checkAndMountVolume(volume);
@@ -132,11 +129,22 @@ AutomountManager.prototype = {
         return false;
     },
 
+    isSessionActive: function() {
+        // Return whether the current session is active, using the
+        // right mechanism: either systemd if available or ConsoleKit
+        // as fallback.
+
+        if (haveSystemd())
+            return Shell.session_is_active_for_systemd();
+
+        return this.ckListener.sessionActive;
+    },
+
     _onDriveConnected: function() {
         // if we're not in the current ConsoleKit session,
         // or screensaver is active, don't play sounds
-        if (!this.ckListener.sessionActive)
-            return;        
+        if (!this.isSessionActive())
+            return;
 
         if (this._ssProxy.screenSaverActive)
             return;
@@ -147,8 +155,8 @@ AutomountManager.prototype = {
     _onDriveDisconnected: function() {
         // if we're not in the current ConsoleKit session,
         // or screensaver is active, don't play sounds
-        if (!this.ckListener.sessionActive)
-            return;        
+        if (!this.isSessionActive())
+            return;
 
         if (this._ssProxy.screenSaverActive)
             return;
@@ -159,7 +167,7 @@ AutomountManager.prototype = {
     _onDriveEjectButton: function(monitor, drive) {
         // TODO: this code path is not tested, as the GVfs volume monitor
         // doesn't emit this signal just yet.
-        if (!this.ckListener.sessionActive)
+        if (!this.isSessionActive())
             return;
 
         // we force stop/eject in this case, so we don't have to pass a
@@ -198,7 +206,7 @@ AutomountManager.prototype = {
         if (params.checkSession) {
             // if we're not in the current ConsoleKit session,
             // don't attempt automount
-            if (!this.ckListener.sessionActive)
+            if (!this.isSessionActive())
                 return;
 
             if (this._ssProxy.screenSaverActive) {
@@ -279,4 +287,4 @@ AutomountManager.prototype = {
             return false;
         });
     }
-}
+});

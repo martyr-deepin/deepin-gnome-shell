@@ -30,11 +30,9 @@ const EXEC_ARG_KEY = 'exec-arg';
 
 const DIALOG_GROW_TIME = 0.1;
 
-function CommandCompleter() {
-    this._init();
-}
+const CommandCompleter = new Lang.Class({
+    Name: 'CommandCompleter',
 
-CommandCompleter.prototype = {
     _init : function() {
         this._changedCount = 0;
         this._paths = GLib.getenv('PATH').split(':');
@@ -162,16 +160,14 @@ CommandCompleter.prototype = {
             return common.substr(text.length);
         return common;
     }
-};
+});
 
-function RunDialog() {
-    this._init();
-}
+const RunDialog = new Lang.Class({
+    Name: 'RunDialog',
+    Extends: ModalDialog.ModalDialog,
 
-RunDialog.prototype = {
-__proto__: ModalDialog.ModalDialog.prototype,
     _init : function() {
-        ModalDialog.ModalDialog.prototype._init.call(this, { styleClass: 'run-dialog' });
+        this.parent({ styleClass: 'run-dialog' });
 
         this._lockdownSettings = new Gio.Settings({ schema: LOCKDOWN_SCHEMA });
         this._terminalSettings = new Gio.Settings({ schema: TERMINAL_SCHEMA });
@@ -213,6 +209,8 @@ __proto__: ModalDialog.ModalDialog.prototype,
         let entry = new St.Entry({ style_class: 'run-dialog-entry' });
         ShellEntry.addContextMenu(entry);
 
+        entry.label_actor = label;
+
         this._entryText = entry.clutter_text;
         this.contentLayout.add(entry, { y_align: St.Align.START });
         this.setInitialKeyFocus(this._entryText);
@@ -246,7 +244,7 @@ __proto__: ModalDialog.ModalDialog.prototype,
             let symbol = e.get_key_symbol();
             if (symbol == Clutter.Return || symbol == Clutter.KP_Enter) {
                 this.popModal();
-                if (Shell.get_event_state(e) & Clutter.ModifierType.CONTROL_MASK)
+                if (e.get_state() & Clutter.ModifierType.CONTROL_MASK)
                     this._run(o.get_text(), true);
                 else
                     this._run(o.get_text(), false);
@@ -384,8 +382,7 @@ __proto__: ModalDialog.ModalDialog.prototype,
         if (this._lockdownSettings.get_boolean(DISABLE_COMMAND_LINE_KEY))
             return;
 
-        ModalDialog.ModalDialog.prototype.open.call(this);
+        this.parent();
     },
-
-};
+});
 Signals.addSignalMethods(RunDialog.prototype);

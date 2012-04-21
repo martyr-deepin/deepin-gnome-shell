@@ -63,7 +63,6 @@ int
 main(int argc, char **argv)
 {
   GOptionContext *context;
-  ClutterActor *stage;
   GError *error = NULL;
   ShellGlobal *global;
   GjsContext *js_context;
@@ -72,8 +71,6 @@ main(int argc, char **argv)
   char *title;
   gsize len;
   int code;
-
-  g_thread_init (NULL);
 
   gtk_init (&argc, &argv);
 
@@ -126,9 +123,8 @@ main(int argc, char **argv)
     filename = argv[1];
   }
 
-  stage = clutter_stage_get_default ();
   title = g_filename_display_basename (filename);
-  clutter_stage_set_title (CLUTTER_STAGE (stage), title);
+  g_set_prgname (title);
   g_free (title);
 
 #if HAVE_BLUETOOTH

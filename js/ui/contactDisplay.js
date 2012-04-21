@@ -5,6 +5,7 @@ const Lang = imports.lang;
 const Meta = imports.gi.Meta;
 const Shell = imports.gi.Shell;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 
 const Util = imports.misc.util;
 const IconGrid = imports.ui.iconGrid;
@@ -20,18 +21,18 @@ function launchContact(id) {
 
 
 /* This class represents a shown contact search result in the overview */
-function Contact(id) {
-    this._init(id);
-}
+const Contact = new Lang.Class({
+    Name: 'Contact',
 
-Contact.prototype = {
     _init: function(id) {
         this._contactSys = Shell.ContactSystem.get_default();
         this.individual = this._contactSys.get_individual(id);
 
         this.actor = new St.Bin({ style_class: 'contact',
                                   reactive: true,
-                                  track_hover: true });
+                                  can_focus: true,
+                                  track_hover: true,
+                                  accessible_role: Atk.Role.PUSH_BUTTON });
 
         let content = new St.BoxLayout( { style_class: 'contact-content',
                                           vertical: false });
@@ -70,6 +71,8 @@ Contact.prototype = {
                                   x_align: St.Align.START,
                                   y_align: St.Align.START });
 
+        this.actor.label_actor = aliasLabel;
+
         let presence = this._createPresence(this.individual.presence_type);
         details.add(presence, { x_fill: false,
                                 y_fill: true,
@@ -95,23 +98,30 @@ Contact.prototype = {
             text = _("Busy");
             iconName = 'user-busy';
             break;
-          default:
+          case Folks.PresenceType.OFFLINE:
             text = _("Offline");
             iconName = 'user-offline';
+            break;
+          default:
+            text = '';
+            iconName = null;
           }
-
-        let icon = new St.Icon({ icon_name: iconName,
-                                 icon_type: St.IconType.FULLCOLOR,
-                                 icon_size: 16,
-                                 style_class: 'contact-details-status-icon' });
-        let label = new St.Label({ text: text });
 
         let box = new St.BoxLayout({ vertical: false,
                                      style_class: 'contact-details-status' });
-        box.add(icon, { x_fill: true,
-                        y_fill: false,
-                        x_align: St.Align.START,
-                        y_align: St.Align.START });
+
+        if (iconName) {
+            let icon = new St.Icon({ icon_name: iconName,
+                                     icon_type: St.IconType.FULLCOLOR,
+                                     icon_size: 16,
+                                     style_class: 'contact-details-status-icon' });
+            box.add(icon, { x_fill: true,
+                            y_fill: false,
+                            x_align: St.Align.START,
+                            y_align: St.Align.START });
+        }
+
+        let label = new St.Label({ text: text });
 
         box.add(label, { x_fill: true,
                          y_fill: false,
@@ -131,30 +141,31 @@ Contact.prototype = {
             return tc.load_icon_name(null, 'avatar-default', St.IconType.FULLCOLOR, size);
         }
     },
-};
+});
 
 
 /* Searches for and returns contacts */
-function ContactSearchProvider() {
-    this._init();
-}
-
-ContactSearchProvider.prototype = {
-    __proto__: Search.SearchProvider.prototype,
+const ContactSearchProvider = new Lang.Class({
+    Name: 'ContactSearchProvider',
+    Extends: Search.SearchProvider,
 
     _init: function() {
-        Search.SearchProvider.prototype._init.call(this, _("CONTACTS"));
+        this.parent(_("CONTACTS"));
         this._contactSys = Shell.ContactSystem.get_default();
     },
 
-    getResultMeta: function(id) {
-        let contact = new Contact(id);
-        return { 'id': id,
-                 'name': contact.alias,
-                 'createIcon': function(size) {
-                         return contact.createIcon(size);
-                 }
-        };
+    getResultMetas: function(ids) {
+        let metas = [];
+        for (let i = 0; i < ids.length; i++) {
+            let contact = new Contact(ids[i]);
+            metas.push({ 'id': ids[i],
+                         'name': contact.alias,
+                         'createIcon': function(size) {
+                             return contact.createIcon(size);
+                         }
+                       });
+        }
+        return metas;
     },
 
     getInitialResultSet: function(terms) {
@@ -182,4 +193,4 @@ ContactSearchProvider.prototype = {
     activateResult: function(id, params) {
         launchContact(id);
     }
-};
+});

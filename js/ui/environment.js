@@ -48,11 +48,6 @@ function init() {
     window.C_ = Gettext.pgettext;
     window.ngettext = Gettext.ngettext;
 
-    // Set the default direction for St widgets (this needs to be done before any use of St)
-    if (Gtk.Widget.get_default_direction() == Gtk.TextDirection.RTL) {
-        St.Widget.set_default_direction(St.TextDirection.RTL);
-    }
-
     // Miscellaneous monkeypatching
     _patchContainerClass(St.BoxLayout);
     _patchContainerClass(St.Table);
@@ -64,10 +59,14 @@ function init() {
     let origToString = Object.prototype.toString;
     Object.prototype.toString = function() {
         let base = origToString.call(this);
-        if ('actor' in this && this.actor instanceof Clutter.Actor)
-            return base.replace(/\]$/, ' delegate for ' + this.actor.toString().substring(1));
-        else
+        try {
+            if ('actor' in this && this.actor instanceof Clutter.Actor)
+                return base.replace(/\]$/, ' delegate for ' + this.actor.toString().substring(1));
+            else
+                return base;
+        } catch(e) {
             return base;
+        }
     };
 
     // Work around https://bugzilla.mozilla.org/show_bug.cgi?id=508783

@@ -1,5 +1,7 @@
 data/gnome-shell.desktop.in.in
+data/gnome-shell-extension-prefs.desktop.in.in
 data/org.gnome.shell.gschema.xml.in
+js/extensionPrefs/main.js
 js/gdm/loginDialog.js
 js/gdm/powerMenu.js
 js/misc/util.js
@@ -10,11 +12,12 @@ js/ui/calendar.js
 js/ui/contactDisplay.js
 js/ui/dash.js
 js/ui/dateMenu.js
-js/ui/docDisplay.js
 js/ui/endSessionDialog.js
 js/ui/extensionSystem.js
 js/ui/keyboard.js
+js/ui/keyringPrompt.js
 js/ui/lookingGlass.js
+js/ui/main.js
 js/ui/messageTray.js
 js/ui/networkAgent.js
 js/ui/notificationDaemon.js
@@ -36,12 +39,14 @@ js/ui/status/volume.js
 js/ui/telepathyClient.js
 js/ui/userMenu.js
 js/ui/viewSelector.js
+js/ui/wanda.js
 js/ui/windowAttentionHandler.js
 src/gvc/gvc-mixer-control.c
 src/main.c
 src/shell-app.c
 src/shell-app-system.c
 src/shell-global.c
+src/shell-keyring-prompt.c
 src/shell-mobile-providers.c
 src/shell-polkit-authentication-agent.c
 src/shell-util.c

@@ -2,6 +2,7 @@
 
 stage {
     font: 16pt serif;
+    color: black;
 }
 
 .red {
@@ -35,6 +36,18 @@ stage {
 .border-image {
     border: 15px;
     border-image: url('border-image.png') 16;
+}
+
+.background-image-200-200 {
+    background-image: url('200-200.svg');
+}
+
+.background-image-100-200 {
+    background-image: url('100-200.svg');
+}
+
+.background-image-200-100 {
+    background-image: url('200-100.svg');
 }
 
 .background-gradient {

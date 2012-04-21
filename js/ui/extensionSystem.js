@@ -11,6 +11,7 @@ const Shell = imports.gi.Shell;
 const Soup = imports.gi.Soup;
 
 const Config = imports.misc.config;
+const ExtensionUtils = imports.misc.extensionUtils;
 const FileUtils = imports.misc.fileUtils;
 const ModalDialog = imports.ui.modalDialog;
 
@@ -22,15 +23,11 @@ const ExtensionState = {
     ERROR: 3,
     OUT_OF_DATE: 4,
     DOWNLOADING: 5,
+    INITIALIZED: 6,
 
     // Used as an error state for operations on unknown extensions,
     // should never be in a real extensionMeta object.
     UNINSTALLED: 99
-};
-
-const ExtensionType = {
-    SYSTEM: 1,
-    PER_USER: 2
 };
 
 const REPOSITORY_URL_BASE = 'https://extensions.gnome.org';
@@ -56,16 +53,10 @@ function _getCertFile() {
 
 _httpSession.ssl_ca_file = _getCertFile();
 
-// Maps uuid -> metadata object
-const extensionMeta = {};
-// Maps uuid -> importer object (extension directory tree)
-const extensions = {};
-// Maps uuid -> extension state object (returned from init())
-const extensionStateObjs = {};
 // Arrays of uuids
 var enabledExtensions;
-// GFile for user extensions
-var userExtensionsDir = null;
+// Contains the order that extensions were enabled in.
+const extensionOrder = [];
 
 // We don't really have a class to add signals on. So, create
 // a simple dummy object, add the signal methods, and export those
@@ -76,40 +67,7 @@ Signals.addSignalMethods(_signals);
 const connect = Lang.bind(_signals, _signals.connect);
 const disconnect = Lang.bind(_signals, _signals.disconnect);
 
-// UUID => Array of error messages
-var errors = {};
-
 const ENABLED_EXTENSIONS_KEY = 'enabled-extensions';
-
-/**
- * versionCheck:
- * @required: an array of versions we're compatible with
- * @current: the version we have
- *
- * Check if a component is compatible for an extension.
- * @required is an array, and at least one version must match.
- * @current must be in the format <major>.<minor>.<point>.<micro>
- * <micro> is always ignored
- * <point> is ignored if <minor> is even (so you can target the
- * whole stable release)
- * <minor> and <major> must match
- * Each target version must be at least <major> and <minor>
- */
-function versionCheck(required, current) {
-    let currentArray = current.split('.');
-    let major = currentArray[0];
-    let minor = currentArray[1];
-    let point = currentArray[2];
-    for (let i = 0; i < required.length; i++) {
-        let requiredArray = required[i].split('.');
-        if (requiredArray[0] == major &&
-            requiredArray[1] == minor &&
-            (requiredArray[2] == point ||
-             (requiredArray[2] == undefined && parseInt(minor) % 2 == 0)))
-            return true;
-    }
-    return false;
-}
 
 function installExtensionFromUUID(uuid, version_tag) {
     let params = { uuid: uuid,
@@ -128,8 +86,8 @@ function installExtensionFromUUID(uuid, version_tag) {
 }
 
 function uninstallExtensionFromUUID(uuid) {
-    let meta = extensionMeta[uuid];
-    if (!meta)
+    let extension = ExtensionUtils.extensions[uuid];
+    if (!extension)
         return false;
 
     // Try to disable it -- if it's ERROR'd, we can't guarantee that,
@@ -138,22 +96,15 @@ function uninstallExtensionFromUUID(uuid) {
     disableExtension(uuid);
 
     // Don't try to uninstall system extensions
-    if (meta.type != ExtensionType.PER_USER)
+    if (extension.type != ExtensionUtils.ExtensionType.PER_USER)
         return false;
 
-    meta.state = ExtensionState.UNINSTALLED;
-    _signals.emit('extension-state-changed', meta);
+    extension.state = ExtensionState.UNINSTALLED;
+    _signals.emit('extension-state-changed', extension);
 
-    delete extensionMeta[uuid];
+    delete ExtensionUtils.extensions[uuid];
 
-    // Importers are marked as PERMANENT, so we can't do this.
-    // delete extensions[uuid];
-    extensions[uuid] = undefined;
-
-    delete extensionStateObjs[uuid];
-    delete errors[uuid];
-
-    FileUtils.recursivelyDeleteDir(Gio.file_new_for_path(meta.path));
+    FileUtils.recursivelyDeleteDir(Gio.file_new_for_path(extension.path));
 
     return true;
 }
@@ -174,7 +125,7 @@ function gotExtensionZipFile(session, message, uuid) {
     }
 
     let stream = new Gio.UnixOutputStream({ fd: fd });
-    let dir = userExtensionsDir.get_child(uuid);
+    let dir = ExtensionUtils.userExtensionsDir.get_child(uuid);
     Shell.write_soup_message_to_stream(stream, message);
     stream.close(null);
     let [success, pid] = GLib.spawn_async(null,
@@ -198,55 +149,94 @@ function gotExtensionZipFile(session, message, uuid) {
             global.settings.set_strv(ENABLED_EXTENSIONS_KEY, enabledExtensions);
         }
 
-        loadExtension(dir, true, ExtensionType.PER_USER);
+        loadExtension(dir, ExtensionUtils.ExtensionType.PER_USER, true);
     });
 }
 
 function disableExtension(uuid) {
-    let meta = extensionMeta[uuid];
-    if (!meta)
+    let extension = ExtensionUtils.extensions[uuid];
+    if (!extension)
         return;
 
-    if (meta.state != ExtensionState.ENABLED)
+    if (extension.state != ExtensionState.ENABLED)
         return;
 
-    let extensionState = extensionStateObjs[uuid];
+    // "Rebase" the extension order by disabling and then enabling extensions
+    // in order to help prevent conflicts.
+
+    // Example:
+    //   order = [A, B, C, D, E]
+    //   user disables C
+    //   this should: disable E, disable D, disable C, enable D, enable E
+
+    let orderIdx = extensionOrder.indexOf(uuid);
+    let order = extensionOrder.slice(orderIdx + 1);
+    let orderReversed = order.slice().reverse();
+
+    for (let i = 0; i < orderReversed.length; i++) {
+        let uuid = orderReversed[i];
+        try {
+            ExtensionUtils.extensions[uuid].stateObj.disable();
+        } catch(e) {
+            logExtensionError(uuid, e.toString());
+        }
+    }
 
     try {
-        extensionState.disable();
+        extension.stateObj.disable();
     } catch(e) {
         logExtensionError(uuid, e.toString());
         return;
     }
 
-    meta.state = ExtensionState.DISABLED;
-    _signals.emit('extension-state-changed', meta);
+    for (let i = 0; i < order.length; i++) {
+        let uuid = order[i];
+        try {
+            ExtensionUtils.extensions[uuid].stateObj.enable();
+        } catch(e) {
+            logExtensionError(uuid, e.toString());
+        }
+    }
+
+    extensionOrder.splice(orderIdx, 1);
+
+    extension.state = ExtensionState.DISABLED;
+    _signals.emit('extension-state-changed', extension);
 }
 
 function enableExtension(uuid) {
-    let meta = extensionMeta[uuid];
-    if (!meta)
+    let extension = ExtensionUtils.extensions[uuid];
+    if (!extension)
         return;
 
-    if (meta.state != ExtensionState.DISABLED)
+    if (extension.state == ExtensionState.INITIALIZED)
+        initExtension(uuid);
+
+    if (extension.state != ExtensionState.DISABLED)
         return;
 
-    let extensionState = extensionStateObjs[uuid];
+    extensionOrder.push(uuid);
 
     try {
-        extensionState.enable();
+        extension.stateObj.enable();
     } catch(e) {
         logExtensionError(uuid, e.toString());
         return;
     }
 
-    meta.state = ExtensionState.ENABLED;
-    _signals.emit('extension-state-changed', meta);
+    extension.state = ExtensionState.ENABLED;
+    _signals.emit('extension-state-changed', extension);
 }
 
 function logExtensionError(uuid, message, state) {
-    if (!errors[uuid]) errors[uuid] = [];
-    errors[uuid].push(message);
+    let extension = ExtensionUtils.extensions[uuid];
+    if (!extension)
+        return;
+
+    if (!extension.errors)
+        extension.errors = [];
+
+    extension.errors.push(message);
     global.logError('Extension "%s" had error: %s'.format(uuid, message));
     state = state || ExtensionState.ERROR;
     _signals.emit('extension-state-changed', { uuid: uuid,
@@ -254,75 +244,49 @@ function logExtensionError(uuid, message, state) {
                                                state: state });
 }
 
-function loadExtension(dir, enabled, type) {
-    let info;
+function loadExtension(dir, type, enabled) {
     let uuid = dir.get_basename();
+    let extension;
 
-    let metadataFile = dir.get_child('metadata.json');
-    if (!metadataFile.query_exists(null)) {
-        logExtensionError(uuid, 'Missing metadata.json');
+    if (ExtensionUtils.extensions[uuid] != undefined) {
+        global.logError('Extension "%s" is already loaded'.format(uuid));
         return;
     }
 
-    let metadataContents;
     try {
-        metadataContents = Shell.get_file_contents_utf8_sync(metadataFile.get_path());
-    } catch (e) {
-        logExtensionError(uuid, 'Failed to load metadata.json: ' + e);
+        extension = ExtensionUtils.createExtensionObject(uuid, dir, type);
+    } catch(e) {
+        logExtensionError(uuid, e.message);
         return;
     }
-    let meta;
-    try {
-        meta = JSON.parse(metadataContents);
-    } catch (e) {
-        logExtensionError(uuid, 'Failed to parse metadata.json: ' + e);
-        return;
-    }
-
-    let requiredProperties = ['uuid', 'name', 'description', 'shell-version'];
-    for (let i = 0; i < requiredProperties.length; i++) {
-        let prop = requiredProperties[i];
-        if (!meta[prop]) {
-            logExtensionError(uuid, 'missing "' + prop + '" property in metadata.json');
-            return;
-        }
-    }
-
-    if (extensions[uuid] != undefined) {
-        logExtensionError(uuid, 'extension already loaded');
-        return;
-    }
-
-    // Encourage people to add this
-    if (!meta['url']) {
-        global.log('Warning: Missing "url" property in metadata.json');
-    }
-
-    if (uuid != meta.uuid) {
-        logExtensionError(uuid, 'uuid "' + meta.uuid + '" from metadata.json does not match directory name "' + uuid + '"');
-        return;
-    }
-
-    if (!versionCheck(meta['shell-version'], Config.PACKAGE_VERSION) ||
-        (meta['js-version'] && !versionCheck(meta['js-version'], Config.GJS_VERSION))) {
-        logExtensionError(uuid, 'extension is not compatible with current GNOME Shell and/or GJS version');
-        return;
-    }
-
-    extensionMeta[uuid] = meta;
-    meta.type = type;
-    meta.path = dir.get_path();
-    meta.error = '';
 
     // Default to error, we set success as the last step
-    meta.state = ExtensionState.ERROR;
+    extension.state = ExtensionState.ERROR;
 
-    if (!versionCheck(meta['shell-version'], Config.PACKAGE_VERSION) ||
-        (meta['js-version'] && !versionCheck(meta['js-version'], Config.GJS_VERSION))) {
+    if (ExtensionUtils.isOutOfDate(extension)) {
         logExtensionError(uuid, 'extension is not compatible with current GNOME Shell and/or GJS version', ExtensionState.OUT_OF_DATE);
-        meta.state = ExtensionState.OUT_OF_DATE;
+        extension.state = ExtensionState.OUT_OF_DATE;
         return;
     }
+
+    if (enabled) {
+        initExtension(uuid);
+        if (extension.state == ExtensionState.DISABLED)
+            enableExtension(uuid);
+    } else {
+        extension.state = ExtensionState.INITIALIZED;
+    }
+
+    _signals.emit('extension-state-changed', extension);
+    global.log('Loaded extension ' + uuid);
+}
+
+function initExtension(uuid) {
+    let extension = ExtensionUtils.extensions[uuid];
+    let dir = extension.dir;
+
+    if (!extension)
+        throw new Error("Extension was not properly created. Call loadExtension first");
 
     let extensionJs = dir.get_child('extension.js');
     if (!extensionJs.query_exists(null)) {
@@ -345,12 +309,12 @@ function loadExtension(dir, enabled, type) {
     let extensionModule;
     let extensionState = null;
     try {
-        global.add_extension_importer('imports.ui.extensionSystem.extensions', meta.uuid, dir.get_path());
-        extensionModule = extensions[meta.uuid].extension;
+        ExtensionUtils.installImporter(extension);
+        extensionModule = extension.imports.extension;
     } catch (e) {
         if (stylesheetPath != null)
             theme.unload_stylesheet(stylesheetPath);
-        logExtensionError(uuid, e);
+        logExtensionError(uuid, '' + e);
         return;
     }
 
@@ -360,7 +324,7 @@ function loadExtension(dir, enabled, type) {
     }
 
     try {
-        extensionState = extensionModule.init(meta);
+        extensionState = extensionModule.init(extension);
     } catch (e) {
         if (stylesheetPath != null)
             theme.unload_stylesheet(stylesheetPath);
@@ -370,7 +334,7 @@ function loadExtension(dir, enabled, type) {
 
     if (!extensionState)
         extensionState = extensionModule;
-    extensionStateObjs[uuid] = extensionState;
+    extension.stateObj = extensionState;
 
     if (!extensionState.enable) {
         logExtensionError(uuid, 'missing \'enable\' function');
@@ -381,14 +345,9 @@ function loadExtension(dir, enabled, type) {
         return;
     }
 
-    meta.state = ExtensionState.DISABLED;
+    extension.state = ExtensionState.DISABLED;
 
-    if (enabled)
-        enableExtension(uuid);
-
-    _signals.emit('extension-loaded', meta.uuid);
-    _signals.emit('extension-state-changed', meta);
-    global.log('Loaded extension ' + meta.uuid);
+    _signals.emit('extension-loaded', uuid);
 }
 
 function onEnabledExtensionsChanged() {
@@ -414,61 +373,25 @@ function onEnabledExtensionsChanged() {
 }
 
 function init() {
-    let userExtensionsPath = GLib.build_filenamev([global.userdatadir, 'extensions']);
-    userExtensionsDir = Gio.file_new_for_path(userExtensionsPath);
-    try {
-        if (!userExtensionsDir.query_exists(null))
-            userExtensionsDir.make_directory_with_parents(null);
-    } catch (e) {
-        global.logError('' + e);
-    }
+    ExtensionUtils.init();
 
     global.settings.connect('changed::' + ENABLED_EXTENSIONS_KEY, onEnabledExtensionsChanged);
     enabledExtensions = global.settings.get_strv(ENABLED_EXTENSIONS_KEY);
 }
 
-function _loadExtensionsIn(dir, type) {
-    let fileEnum;
-    let file, info;
-    try {
-        fileEnum = dir.enumerate_children('standard::*', Gio.FileQueryInfoFlags.NONE, null);
-    } catch (e) {
-        global.logError('' + e);
-       return;
-    }
-
-    while ((info = fileEnum.next_file(null)) != null) {
-        let fileType = info.get_file_type();
-        if (fileType != Gio.FileType.DIRECTORY)
-            continue;
-        let name = info.get_name();
-        let child = dir.get_child(name);
-        let enabled = enabledExtensions.indexOf(name) != -1;
-        loadExtension(child, enabled, type);
-    }
-    fileEnum.close(null);
-}
-
 function loadExtensions() {
-    let systemDataDirs = GLib.get_system_data_dirs();
-    for (let i = 0; i < systemDataDirs.length; i++) {
-        let dirPath = systemDataDirs[i] + '/gnome-shell/extensions';
-        let dir = Gio.file_new_for_path(dirPath);
-        if (dir.query_exists(null))
-            _loadExtensionsIn(dir, ExtensionType.SYSTEM);
-    }
-    _loadExtensionsIn(userExtensionsDir, ExtensionType.PER_USER);
+    ExtensionUtils.scanExtensions(function(uuid, dir, type) {
+        let enabled = enabledExtensions.indexOf(uuid) != -1;
+        loadExtension(dir, type, enabled);
+    });
 }
 
-function InstallExtensionDialog(uuid, version_tag, name) {
-    this._init(uuid, version_tag, name);
-}
-
-InstallExtensionDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
+const InstallExtensionDialog = new Lang.Class({
+    Name: 'InstallExtensionDialog',
+    Extends: ModalDialog.ModalDialog,
 
     _init: function(uuid, version_tag, name) {
-        ModalDialog.ModalDialog.prototype._init.call(this, { styleClass: 'extension-dialog' });
+        this.parent({ styleClass: 'extension-dialog' });
 
         this._uuid = uuid;
         this._version_tag = version_tag;
@@ -506,13 +429,11 @@ InstallExtensionDialog.prototype = {
     },
 
     _onInstallButtonPressed: function(button, event) {
-        let meta = { uuid: this._uuid,
-                     state: ExtensionState.DOWNLOADING,
-                     error: '' };
+        let state = { uuid: this._uuid,
+                      state: ExtensionState.DOWNLOADING,
+                      error: '' };
 
-        extensionMeta[this._uuid] = meta;
-
-        _signals.emit('extension-state-changed', meta);
+        _signals.emit('extension-state-changed', state);
 
         let params = { version_tag: this._version_tag,
                        shell_version: Config.PACKAGE_VERSION,
@@ -528,4 +449,4 @@ InstallExtensionDialog.prototype = {
 
         this.close(global.get_current_time());
     }
-};
+});

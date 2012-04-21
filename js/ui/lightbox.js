@@ -1,5 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
+const Clutter = imports.gi.Clutter;
 const Lang = imports.lang;
 const Meta = imports.gi.Meta;
 const St = imports.gi.St;
@@ -30,11 +31,9 @@ const Tweener = imports.ui.tweener;
  * @container and will track any changes in its size. You can override
  * this by passing an explicit width and height in @params.
  */
-function Lightbox(container, params) {
-    this._init(container, params);
-}
+const Lightbox = new Lang.Class({
+    Name: 'Lightbox',
 
-Lightbox.prototype = {
     _init : function(container, params) {
         params = Params.parse(params, { inhibitEvents: false,
                                         width: null,
@@ -59,27 +58,16 @@ Lightbox.prototype = {
         if (params.width && params.height) {
             this.actor.width = params.width;
             this.actor.height = params.height;
-            this._allocationChangedSignalId = 0;
         } else {
-            this.actor.width = container.width;
-            this.actor.height = container.height;
-            this._allocationChangedSignalId = container.connect('allocation-changed', Lang.bind(this, this._allocationChanged));
+            let constraint = new Clutter.BindConstraint({ source: container,
+                                                          coordinate: Clutter.BindCoordinate.ALL });
+            this.actor.add_constraint(constraint);
         }
 
         this._actorAddedSignalId = container.connect('actor-added', Lang.bind(this, this._actorAdded));
         this._actorRemovedSignalId = container.connect('actor-removed', Lang.bind(this, this._actorRemoved));
 
         this._highlighted = null;
-    },
-
-    _allocationChanged : function(container, box, flags) {
-        Meta.later_add(Meta.LaterType.BEFORE_REDRAW, Lang.bind(this, function() {
-            this.actor.width = this.width;
-            this.actor.height = this.height;
-            return false;
-        }));
-        this.width = this._container.width;
-        this.height = this._container.height;
     },
 
     _actorAdded : function(container, newChild) {
@@ -189,11 +177,9 @@ Lightbox.prototype = {
      * by destroying its container or by explicitly calling this.destroy().
      */
     _onDestroy: function() {
-        if (this._allocationChangedSignalId != 0)
-            this._container.disconnect(this._allocationChangedSignalId);
         this._container.disconnect(this._actorAddedSignalId);
         this._container.disconnect(this._actorRemovedSignalId);
 
         this.highlight(null);
     }
-};
+});

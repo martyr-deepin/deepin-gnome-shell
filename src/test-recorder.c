@@ -29,7 +29,6 @@ int main (int argc, char **argv)
   ClutterAnimation *animation;
   ClutterColor red, green, blue;
 
-  g_thread_init (NULL);
   gst_init (&argc, &argv);
   if (clutter_init (&argc, &argv) != CLUTTER_INIT_SUCCESS)
     return 1;
@@ -37,14 +36,15 @@ int main (int argc, char **argv)
   clutter_color_from_string (&red, "red");
   clutter_color_from_string (&green, "green");
   clutter_color_from_string (&blue, "blue");
-  stage = clutter_stage_get_default ();
+  stage = clutter_stage_new ();
+  g_signal_connect (stage, "destroy", G_CALLBACK (clutter_main_quit), NULL);
 
   text = g_object_new (CLUTTER_TYPE_TEXT,
 		       "text", "Red",
 		       "font-name", "Sans 40px",
 		       "color", &red,
 		       NULL);
-  clutter_container_add_actor (CLUTTER_CONTAINER (stage), text);
+  clutter_actor_add_child (stage, text);
   animation = clutter_actor_animate (text,
 				     CLUTTER_EASE_IN_OUT_QUAD,
 				     3000,
@@ -62,7 +62,7 @@ int main (int argc, char **argv)
 		       "y", 0,
 		       NULL);
   clutter_actor_set_anchor_point_from_gravity (text, CLUTTER_GRAVITY_NORTH_EAST);
-  clutter_container_add_actor (CLUTTER_CONTAINER (stage), text);
+  clutter_actor_add_child (stage, text);
   animation = clutter_actor_animate (text,
 				     CLUTTER_EASE_IN_OUT_QUAD,
 				     3000,
@@ -78,7 +78,7 @@ int main (int argc, char **argv)
 		       "y", 480,
 		       NULL);
   clutter_actor_set_anchor_point_from_gravity (text, CLUTTER_GRAVITY_SOUTH_WEST);
-  clutter_container_add_actor (CLUTTER_CONTAINER (stage), text);
+  clutter_actor_add_child (stage, text);
   animation = clutter_actor_animate (text,
 				     CLUTTER_EASE_IN_OUT_QUAD,
 				     3000,

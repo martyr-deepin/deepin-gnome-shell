@@ -10,11 +10,9 @@ const Params = imports.misc.params;
 const ICON_SIZE = 48;
 
 
-function BaseIcon(label, createIcon) {
-    this._init(label, createIcon);
-}
+const BaseIcon = new Lang.Class({
+    Name: 'BaseIcon',
 
-BaseIcon.prototype = {
     _init : function(label, params) {
         params = Params.parse(params, { createIcon: null,
                                         setSizeManually: false,
@@ -27,8 +25,6 @@ BaseIcon.prototype = {
                            Lang.bind(this, this._onStyleChanged));
 
         this._spacing = 0;
-        this._binSpacing = 0;
-        this._labelSpacing = 0;
 
         let box = new Shell.GenericContainer();
         box.connect('allocate', Lang.bind(this, this._allocate));
@@ -39,14 +35,13 @@ BaseIcon.prototype = {
         this.actor.set_child(box);
 
         this.iconSize = ICON_SIZE;
-        this._iconBin = new St.Bin({style_class: 'overview-icon-bin'});
+        this._iconBin = new St.Bin({ x_align: St.Align.MIDDLE,
+                                     y_align: St.Align.MIDDLE });
 
         box.add_actor(this._iconBin);
 
         if (params.showLabel) {
-            this.label = new St.Label({ style_class: 'overview-icon-label',
-										text: label });
-			this.label.get_clutter_text().set_line_wrap(true);
+            this.label = new St.Label({ text: label });
             box.add_actor(this.label);
         } else {
             this.label = null;
@@ -73,24 +68,23 @@ BaseIcon.prototype = {
 
         if (this.label) {
             let [labelMinHeight, labelNatHeight] = this.label.get_preferred_height(-1);
-            preferredHeight += this._spacing + this._binSpacing + this._labelSpacing + labelNatHeight;
+            preferredHeight += this._spacing + labelNatHeight;
 
             let labelHeight = availHeight >= preferredHeight ? labelNatHeight
                                                              : labelMinHeight;
-			
-            iconSize -= this._spacing + this._binSpacing + this._labelSpacing + labelHeight;
+            iconSize -= this._spacing + labelHeight;
 
             childBox.x1 = 0;
             childBox.x2 = availWidth;
-            childBox.y1 = iconSize + this._spacing + this._binSpacing * 2 + this._labelSpacing;
+            childBox.y1 = iconSize + this._spacing;
             childBox.y2 = childBox.y1 + labelHeight;
             this.label.allocate(childBox, flags);
         }
 
         childBox.x1 = Math.floor((availWidth - iconNatWidth) / 2);
+        childBox.y1 = Math.floor((iconSize - iconNatHeight) / 2);
         childBox.x2 = childBox.x1 + iconNatWidth;
-        childBox.y1 = Math.floor((iconSize - iconNatHeight) / 2) + this._binSpacing;
-        childBox.y2 = childBox.y1 + iconNatHeight + this._binSpacing;
+        childBox.y2 = childBox.y1 + iconNatHeight;
         this._iconBin.allocate(childBox, flags);
     },
 
@@ -105,8 +99,8 @@ BaseIcon.prototype = {
 
         if (this.label) {
             let [labelMinHeight, labelNatHeight] = this.label.get_preferred_height(forWidth);
-            alloc.min_size += this._spacing + this._binSpacing + this._labelSpacing + labelMinHeight;
-            alloc.natural_size += this._spacing + this._binSpacing + this._labelSpacing + labelNatHeight;
+            alloc.min_size += this._spacing + labelMinHeight;
+            alloc.natural_size += this._spacing + labelNatHeight;
         }
     },
 
@@ -132,21 +126,17 @@ BaseIcon.prototype = {
         this.iconSize = size;
         this.icon = this.createIcon(this.iconSize);
 
+        this._iconBin.child = this.icon;
+
         // The icon returned by createIcon() might actually be smaller than
         // the requested icon size (for instance StTextureCache does this
         // for fallback icons), so set the size explicitly.
-        this.icon.set_size(this.iconSize, this.iconSize);
-
-        this._iconBin.child = this.icon;
+        this._iconBin.set_size(this.iconSize, this.iconSize);
     },
 
     _onStyleChanged: function() {
         let node = this.actor.get_theme_node();
-		let binNode = this._iconBin.get_theme_node();
-		let labelNode = this.label.get_theme_node();
         this._spacing = node.get_length('spacing');
-		this._binSpacing = binNode.get_length('spacing');
-        this._labelSpacing = labelNode.get_length('spacing');
 
         let size;
         if (this._setSizeManually) {
@@ -158,13 +148,11 @@ BaseIcon.prototype = {
 
         this._createIconTexture(size);
     }
-};
+});
 
-function IconGrid(params) {
-    this._init(params);
-}
+const IconGrid = new Lang.Class({
+    Name: 'IconGrid',
 
-IconGrid.prototype = {
     _init: function(params) {
         params = Params.parse(params, { rowLimit: null,
                                         columnLimit: null,
@@ -177,7 +165,7 @@ IconGrid.prototype = {
                                         vertical: true });
         // Pulled from CSS, but hardcode some defaults here
         this._spacing = 0;
-        this._item_size = ICON_SIZE;
+        this._hItemSize = this._vItemSize = ICON_SIZE;
         this._grid = new Shell.GenericContainer();
         this.actor.add(this._grid, { expand: true, y_align: St.Align.START });
         this.actor.connect('style-changed', Lang.bind(this, this._onStyleChanged));
@@ -196,8 +184,8 @@ IconGrid.prototype = {
         // Kind of a lie, but not really an issue right now.  If
         // we wanted to support some sort of hidden/overflow that would
         // need higher level design
-        alloc.min_size = this._item_size;
-        alloc.natural_size = nColumns * this._item_size + totalSpacing;
+        alloc.min_size = this._hItemSize;
+        alloc.natural_size = nColumns * this._hItemSize + totalSpacing;
     },
 
     _getVisibleChildren: function() {
@@ -219,7 +207,7 @@ IconGrid.prototype = {
         if (this._rowLimit)
             nRows = Math.min(nRows, this._rowLimit);
         let totalSpacing = Math.max(0, nRows - 1) * this._spacing;
-        let height = nRows * this._item_size + totalSpacing;
+        let height = nRows * this._vItemSize + totalSpacing;
         alloc.min_size = height;
         alloc.natural_size = height;
     },
@@ -252,13 +240,13 @@ IconGrid.prototype = {
                 = children[i].get_preferred_size();
 
             /* Center the item in its allocation horizontally */
-            let width = Math.min(this._item_size, childNaturalWidth);
+            let width = Math.min(this._hItemSize, childNaturalWidth);
             let childXSpacing = Math.max(0, width - childNaturalWidth) / 2;
-            let height = Math.min(this._item_size, childNaturalHeight);
+            let height = Math.min(this._vItemSize, childNaturalHeight);
             let childYSpacing = Math.max(0, height - childNaturalHeight) / 2;
 
             let childBox = new Clutter.ActorBox();
-            if (St.Widget.get_default_direction() == St.TextDirection.RTL) {
+            if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL) {
                 let _x = box.x2 - (x + width);
                 childBox.x1 = Math.floor(_x - childXSpacing);
             } else {
@@ -282,10 +270,10 @@ IconGrid.prototype = {
             }
 
             if (columnIndex == 0) {
-                y += this._item_size + this._spacing;
+                y += this._vItemSize + this._spacing;
                 x = box.x1 + leftPadding;
             } else {
-                x += this._item_size + this._spacing;
+                x += this._hItemSize + this._spacing;
             }
         }
     },
@@ -298,8 +286,8 @@ IconGrid.prototype = {
         let nColumns = 0;
         let usedWidth = 0;
         while ((this._colLimit == null || nColumns < this._colLimit) &&
-               (usedWidth + this._item_size <= forWidth)) {
-            usedWidth += this._item_size + this._spacing;
+               (usedWidth + this._hItemSize <= forWidth)) {
+            usedWidth += this._hItemSize + this._spacing;
             nColumns += 1;
         }
 
@@ -312,7 +300,8 @@ IconGrid.prototype = {
     _onStyleChanged: function() {
         let themeNode = this.actor.get_theme_node();
         this._spacing = themeNode.get_length('spacing');
-        this._item_size = themeNode.get_length('-shell-grid-item-size');
+        this._hItemSize = themeNode.get_length('-shell-grid-horizontal-item-size') || ICON_SIZE;
+        this._vItemSize = themeNode.get_length('-shell-grid-vertical-item-size') || ICON_SIZE;
         this._grid.queue_relayout();
     },
 
@@ -333,4 +322,4 @@ IconGrid.prototype = {
     visibleItemsCount: function() {
         return this._grid.get_children().length - this._grid.get_n_skip_paint();
     }
-};
+});

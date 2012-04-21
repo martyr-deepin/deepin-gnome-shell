@@ -1,7 +1,6 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Lang = imports.lang;
-const DBus = imports.dbus;
 const Gio = imports.gi.Gio;
 const St = imports.gi.St;
 
@@ -62,31 +61,23 @@ function startAppForMount(app, mount) {
 
 /******************************************/
 
-const HotplugSnifferIface = {
-    name: 'org.gnome.Shell.HotplugSniffer',
-    methods: [{ name: 'SniffURI',
-                inSignature: 's',
-                outSignature: 'as' }]
-};
+const HotplugSnifferIface = <interface name="org.gnome.Shell.HotplugSniffer">
+<method name="SniffURI">
+    <arg type="s" direction="in" />
+    <arg type="as" direction="out" />
+</method>
+</interface>;
 
-const HotplugSniffer = function() {
-    this._init();
-};
-
-HotplugSniffer.prototype = {
-    _init: function() {
-        DBus.session.proxifyObject(this,
+const HotplugSnifferProxy = Gio.DBusProxy.makeProxyWrapper(HotplugSnifferIface);
+function HotplugSniffer() {
+    return new HotplugSnifferProxy(Gio.DBus.session,
                                    'org.gnome.Shell.HotplugSniffer',
                                    '/org/gnome/Shell/HotplugSniffer');
-    },
-};
-DBus.proxifyPrototype(HotplugSniffer.prototype, HotplugSnifferIface);
-
-function ContentTypeDiscoverer(callback) {
-    this._init(callback);
 }
 
-ContentTypeDiscoverer.prototype = {
+const ContentTypeDiscoverer = new Lang.Class({
+    Name: 'ContentTypeDiscoverer',
+
     _init: function(callback) {
         this._callback = callback;
     },
@@ -114,9 +105,8 @@ ContentTypeDiscoverer.prototype = {
             let root = mount.get_root();
 
             let hotplugSniffer = new HotplugSniffer();
-            hotplugSniffer.SniffURIRemote
-                (root.get_uri(), DBus.CALL_FLAG_START,
-                 Lang.bind(this, function(contentTypes) {
+            hotplugSniffer.SniffURIRemote(root.get_uri(),
+                 Lang.bind(this, function([contentTypes]) {
                      this._emitCallback(mount, contentTypes);
                  }));
         }
@@ -144,13 +134,11 @@ ContentTypeDiscoverer.prototype = {
 
         this._callback(mount, apps, contentTypes);
     }
-}
+});
 
-function AutorunManager() {
-    this._init();
-}
+const AutorunManager = new Lang.Class({
+    Name: 'AutorunManager',
 
-AutorunManager.prototype = {
     _init: function() {
         this._volumeMonitor = Gio.VolumeMonitor.get();
 
@@ -186,7 +174,7 @@ AutorunManager.prototype = {
     _onMountAdded: function(monitor, mount) {
         // don't do anything if our session is not the currently
         // active one
-        if (!Main.automountManager.ckListener.sessionActive)
+        if (!Main.automountManager.isSessionActive())
             return;
 
         let discoverer = new ContentTypeDiscoverer(Lang.bind (this,
@@ -267,17 +255,14 @@ AutorunManager.prototype = {
                 + ': ' + e.toString());
         }
     },
-}
+});
 
-function AutorunResidentSource() {
-    this._init();
-}
-
-AutorunResidentSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const AutorunResidentSource = new Lang.Class({
+    Name: 'AutorunResidentSource',
+    Extends: MessageTray.Source,
 
     _init: function() {
-        MessageTray.Source.prototype._init.call(this, _("Removable Devices"));
+        this.parent(_("Removable Devices"));
 
         this._mounts = [];
 
@@ -332,19 +317,14 @@ AutorunResidentSource.prototype = {
                               icon_type: St.IconType.FULLCOLOR,
                               icon_size: this.ICON_SIZE });
     }
-}
+});
 
-function AutorunResidentNotification(source) {
-    this._init(source);
-}
-
-AutorunResidentNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const AutorunResidentNotification = new Lang.Class({
+    Name: 'AutorunResidentNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source) {
-        MessageTray.Notification.prototype._init.call(this, source,
-                                                      source.title, null,
-                                                      { customContent: true });
+        this.parent(source, source.title, null, { customContent: true });
 
         // set the notification as resident
         this.setResident(true);
@@ -359,7 +339,7 @@ AutorunResidentNotification.prototype = {
 
     updateForMounts: function(mounts) {
         // remove all the layout content
-        this._layout.destroy_children();
+        this._layout.destroy_all_children();
 
         for (let idx = 0; idx < mounts.length; idx++) {
             let element = mounts[idx];
@@ -418,13 +398,11 @@ AutorunResidentNotification.prototype = {
 
         return item;
     },
-}
+});
 
-function AutorunTransientDispatcher() {
-    this._init();
-}
+const AutorunTransientDispatcher = new Lang.Class({
+    Name: 'AutorunTransientDispatcher',
 
-AutorunTransientDispatcher.prototype = {
     _init: function() {
         this._sources = [];
         this._settings = new Gio.Settings({ schema: SETTINGS_SCHEMA });
@@ -515,17 +493,14 @@ AutorunTransientDispatcher.prototype = {
         // destroy the notification source
         source.destroy();
     }
-}
+});
 
-function AutorunTransientSource(mount, apps) {
-    this._init(mount, apps);
-}
-
-AutorunTransientSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const AutorunTransientSource = new Lang.Class({
+    Name: 'AutorunTransientSource',
+    Extends: MessageTray.Source,
 
     _init: function(mount, apps) {
-        MessageTray.Source.prototype._init.call(this, mount.get_name());
+        this.parent(mount.get_name());
 
         this.mount = mount;
         this.apps = apps;
@@ -542,19 +517,14 @@ AutorunTransientSource.prototype = {
         return new St.Icon({ gicon: this.mount.get_icon(),
                              icon_size: this.ICON_SIZE });
     }
-}
+});
 
-function AutorunTransientNotification(source) {
-    this._init(source);
-}
-
-AutorunTransientNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const AutorunTransientNotification = new Lang.Class({
+    Name: 'AutorunTransientNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source) {
-        MessageTray.Notification.prototype._init.call(this, source,
-                                                      source.title, null,
-                                                      { customContent: true });
+        this.parent(source, source.title, null, { customContent: true });
 
         this._box = new St.BoxLayout({ style_class: 'hotplug-transient-box',
                                        vertical: true });
@@ -587,7 +557,7 @@ AutorunTransientNotification.prototype = {
 
         let label = new St.Bin({ y_align: St.Align.MIDDLE,
                                  child: new St.Label
-                                 ({ text: _("Open with %s").format(app.get_display_name()) })
+                                 ({ text: _("Open with %s").format(app.get_name()) })
                                });
         box.add(label);
 
@@ -629,5 +599,5 @@ AutorunTransientNotification.prototype = {
 
         return button;
     }
-}
+});
 

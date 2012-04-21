@@ -85,6 +85,23 @@ shell_mobile_access_method_type_get_type(void) {
     }
   return enum_type_id;
 }
+/* enumerations from "./shell-network-agent.h" */
+#include "./shell-network-agent.h"
+GType
+shell_network_agent_response_get_type(void) {
+  static GType enum_type_id = 0;
+  if (G_UNLIKELY (!enum_type_id))
+    {
+      static const GEnumValue values[] = {
+        { SHELL_NETWORK_AGENT_CONFIRMED, "SHELL_NETWORK_AGENT_CONFIRMED", "confirmed" },
+        { SHELL_NETWORK_AGENT_USER_CANCELED, "SHELL_NETWORK_AGENT_USER_CANCELED", "user-canceled" },
+        { SHELL_NETWORK_AGENT_INTERNAL_ERROR, "SHELL_NETWORK_AGENT_INTERNAL_ERROR", "internal-error" },
+        { 0, NULL, NULL }
+      };
+      enum_type_id = g_enum_register_static("ShellNetworkAgentResponse", values);
+    }
+  return enum_type_id;
+}
 
 /* Generated data ends here */
 

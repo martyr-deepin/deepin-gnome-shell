@@ -25,9 +25,6 @@ char    *shell_util_normalize_and_casefold     (const char       *str);
 char    *shell_util_format_date                (const char       *format,
                                                 gint64            time_ms);
 
-ClutterModifierType
-         shell_get_event_state                 (ClutterEvent     *event);
-
 void     shell_write_soup_message_to_stream    (GOutputStream    *stream,
                                                 SoupMessage      *message,
                                                 GError          **error);
@@ -39,8 +36,6 @@ gboolean shell_write_string_to_stream          (GOutputStream    *stream,
 char    *shell_get_file_contents_utf8_sync     (const char       *path,
                                                 GError          **error);
 
-void     shell_breakpoint                      (void);
-
 gboolean shell_parse_search_provider           (const char       *data,
                                                 char            **name,
                                                 char            **url,
@@ -51,6 +46,12 @@ gboolean shell_parse_search_provider           (const char       *data,
 void shell_shader_effect_set_double_uniform (ClutterShaderEffect *effect,
                                              const gchar         *name,
                                              gdouble             value);
+
+gboolean shell_session_is_active_for_systemd (void);
+
+gboolean shell_util_wifexited                  (int               status,
+                                                int              *exit);
+
 
 G_END_DECLS
 

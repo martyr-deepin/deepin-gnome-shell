@@ -1,6 +1,5 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
-const DBus = imports.dbus;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Lang = imports.lang;
@@ -34,15 +33,6 @@ const NotificationDirection = {
     RECEIVED: 'chat-received'
 };
 
-let contactFeatures = [Tp.ContactFeature.ALIAS,
-                        Tp.ContactFeature.AVATAR_DATA,
-                        Tp.ContactFeature.PRESENCE];
-
-// This is GNOME Shell's implementation of the Telepathy 'Client'
-// interface. Specifically, the shell is a Telepathy 'Observer', which
-// lets us see messages even if they belong to another app (eg,
-// Empathy).
-
 function makeMessageFromTpMessage(tpMessage, direction) {
     let [text, flags] = tpMessage.to_text();
 
@@ -73,11 +63,9 @@ function makeMessageFromTplEvent(event) {
     };
 }
 
-function Client() {
-    this._init();
-};
+const Client = new Lang.Class({
+    Name: 'Client',
 
-Client.prototype = {
     _init : function() {
         // channel path -> ChatSource
         this._chatSources = {};
@@ -86,11 +74,21 @@ Client.prototype = {
         // account path -> AccountNotification
         this._accountNotifications = {};
 
+        // Define features we want
+        this._accountManager = Tp.AccountManager.dup();
+        let factory = this._accountManager.get_factory();
+        factory.add_account_features([Tp.Account.get_feature_quark_connection()]);
+        factory.add_connection_features([Tp.Connection.get_feature_quark_contact_list()]);
+        factory.add_channel_features([Tp.Channel.get_feature_quark_contacts()]);
+        factory.add_contact_features([Tp.ContactFeature.ALIAS,
+                                      Tp.ContactFeature.AVATAR_DATA,
+                                      Tp.ContactFeature.PRESENCE,
+                                      Tp.ContactFeature.SUBSCRIPTION_STATES]);
+
         // Set up a SimpleObserver, which will call _observeChannels whenever a
         // channel matching its filters is detected.
         // The second argument, recover, means _observeChannels will be run
         // for any existing channel as well.
-        this._accountManager = Tp.AccountManager.dup();
         this._tpClient = new Shell.TpClient({ 'account-manager': this._accountManager,
                                               'name': 'GnomeShell',
                                               'uniquify-name': true })
@@ -117,16 +115,9 @@ Client.prototype = {
             throw new Error('Couldn\'t register Telepathy client. Error: \n' + e);
         }
 
-
         // Watch subscription requests and connection errors
         this._subscriptionSource = null;
         this._accountSource = null;
-        let factory = this._accountManager.get_factory();
-        factory.add_account_features([Tp.Account.get_feature_quark_connection()]);
-        factory.add_connection_features([Tp.Connection.get_feature_quark_contact_list()]);
-        factory.add_contact_features([Tp.ContactFeature.SUBSCRIPTION_STATES,
-                                      Tp.ContactFeature.ALIAS,
-                                      Tp.ContactFeature.AVATAR_DATA]);
 
         this._accountManager.connect('account-validity-changed',
             Lang.bind(this, this._accountValidityChanged));
@@ -136,22 +127,6 @@ Client.prototype = {
 
     _observeChannels: function(observer, account, conn, channels,
                                dispatchOp, requests, context) {
-        // If the self_contact doesn't have the ALIAS, make sure
-        // to fetch it before trying to grab the channels.
-        let self_contact = conn.get_self_contact();
-        if (self_contact.has_feature(Tp.ContactFeature.ALIAS)) {
-            this._finishObserveChannels(account, conn, channels, context);
-        } else {
-            Shell.get_self_contact_features(conn,
-                                            contactFeatures,
-                                            Lang.bind(this, function() {
-                                                this._finishObserveChannels(account, conn, channels, context);
-                                            }));
-            context.delay();
-        }
-    },
-
-    _finishObserveChannels: function(account, conn, channels, context) {
         let len = channels.length;
         for (let i = 0; i < len; i++) {
             let channel = channels[i];
@@ -162,16 +137,7 @@ Client.prototype = {
                targetHandleType != Tp.HandleType.CONTACT)
                continue;
 
-            /* Request a TpContact */
-            Shell.get_tp_contacts(conn, [targetHandle],
-                    contactFeatures,
-                    Lang.bind(this,  function (connection, contacts, failed) {
-                        if (contacts.length < 1)
-                            return;
-
-                        /* We got the TpContact */
-                        this._createChatSource(account, conn, channel, contacts[0]);
-                    }), null);
+            this._createChatSource(account, conn, channel, channel.get_target_contact());
         }
 
         context.accept();
@@ -200,11 +166,11 @@ Client.prototype = {
 
     _handleChannels: function(handler, account, conn, channels,
                               requests, user_action_time, context) {
-        this._handlingChannels(account, conn, channels);
+        this._handlingChannels(account, conn, channels, true);
         context.accept();
     },
 
-    _handlingChannels: function(account, conn, channels) {
+    _handlingChannels: function(account, conn, channels, notify) {
         let len = channels.length;
         for (let i = 0; i < len; i++) {
             let channel = channels[i];
@@ -215,7 +181,18 @@ Client.prototype = {
                 continue;
             }
 
-            if (this._tpClient.is_handling_channel(channel)) {
+            // 'notify' will be true when coming from an actual HandleChannels
+            // call, and not when from a successful Claim call. The point is
+            // we don't want to notify for a channel we just claimed which
+            // has no new messages (for example, a new channel which only has
+            // a delivery notification). We rely on _displayPendingMessages()
+            // and _messageReceived() to notify for new messages.
+
+            // But we should still notify from HandleChannels because the
+            // Telepathy spec states that handlers must foreground channels
+            // in HandleChannels calls which are already being handled.
+
+            if (notify && this._tpClient.is_handling_channel(channel)) {
                 // We are already handling the channel, display the source
                 let source = this._chatSources[channel.get_object_path()];
                 if (source)
@@ -226,33 +203,17 @@ Client.prototype = {
 
     _displayRoomInvitation: function(conn, channel, dispatchOp, context) {
         // We can only approve the rooms if we have been invited to it
-        let selfHandle = channel.group_get_self_handle();
-        if (selfHandle == 0) {
+        let selfContact = channel.group_get_self_contact();
+        if (selfContact == null) {
             Shell.decline_dispatch_op(context, 'Not invited to the room');
             return;
         }
 
-        let [invited, inviter, reason, msg] = channel.group_get_local_pending_info(selfHandle);
+        let [invited, inviter, reason, msg] = channel.group_get_local_pending_contact_info(selfContact);
         if (!invited) {
             Shell.decline_dispatch_op(context, 'Not invited to the room');
             return;
         }
-
-        // Request a TpContact for the inviter
-        Shell.get_tp_contacts(conn, [inviter],
-                contactFeatures,
-                Lang.bind(this, this._createRoomInviteSource, channel, context, dispatchOp));
-
-        context.delay();
-     },
-
-    _createRoomInviteSource: function(connection, contacts, failed, channel, context, dispatchOp) {
-        if (contacts.length < 1) {
-            Shell.decline_dispatch_op(context, 'Failed to get inviter');
-            return;
-        }
-
-        // We got the TpContact
 
         // FIXME: We don't have a 'chat room' icon (bgo #653737) use
         // system-users for now as Empathy does.
@@ -260,7 +221,7 @@ Client.prototype = {
                                         Gio.icon_new_for_string('system-users'));
         Main.messageTray.add(source);
 
-        let notif = new RoomInviteNotification(source, dispatchOp, channel, contacts[0]);
+        let notif = new RoomInviteNotification(source, dispatchOp, channel, inviter);
         source.notify(notif);
         context.accept();
     },
@@ -272,8 +233,7 @@ Client.prototype = {
 
         if (chanType == Tp.IFACE_CHANNEL_TYPE_TEXT)
             this._approveTextChannel(account, conn, channel, dispatchOp, context);
-        else if (chanType == Tp.IFACE_CHANNEL_TYPE_STREAMED_MEDIA ||
-                 chanType == 'org.freedesktop.Telepathy.Channel.Type.Call.DRAFT')
+        else if (chanType == Tp.IFACE_CHANNEL_TYPE_CALL)
             this._approveCall(account, conn, channel, dispatchOp, context);
         else if (chanType == Tp.IFACE_CHANNEL_TYPE_FILE_TRANSFER)
             this._approveFileTransfer(account, conn, channel, dispatchOp, context);
@@ -288,7 +248,7 @@ Client.prototype = {
                                         Lang.bind(this, function(dispatchOp, result) {
                 try {
                     dispatchOp.claim_with_finish(result);
-                    this._handlingChannels(account, conn, [channel]);
+                    this._handlingChannels(account, conn, [channel], false);
                 } catch (err) {
                     throw new Error('Failed to Claim channel: ' + err);
                 }}));
@@ -300,27 +260,11 @@ Client.prototype = {
     },
 
     _approveCall: function(account, conn, channel, dispatchOp, context) {
-        let [targetHandle, targetHandleType] = channel.get_handle();
-
-        Shell.get_tp_contacts(conn, [targetHandle],
-                contactFeatures,
-                Lang.bind(this, this._createAudioVideoSource, channel, context, dispatchOp));
-
-        context.delay();
-    },
-
-    _createAudioVideoSource: function(connection, contacts, failed, channel, context, dispatchOp) {
-        if (contacts.length < 1) {
-            Shell.decline_dispatch_op(context, 'Failed to get inviter');
-            return;
-        }
-
         let isVideo = false;
 
         let props = channel.borrow_immutable_properties();
 
-        if (props['org.freedesktop.Telepathy.Channel.Type.Call.DRAFT.InitialVideo'] ||
-            props[Tp.PROP_CHANNEL_TYPE_STREAMED_MEDIA_INITIAL_VIDEO])
+        if (props[Tp.PROP_CHANNEL_TYPE_CALL_INITIAL_VIDEO])
           isVideo = true;
 
         // We got the TpContact
@@ -329,27 +273,13 @@ Client.prototype = {
                                         Gio.icon_new_for_string('audio-input-microphone'));
         Main.messageTray.add(source);
 
-        let notif = new AudioVideoNotification(source, dispatchOp, channel, contacts[0], isVideo);
+        let notif = new AudioVideoNotification(source, dispatchOp, channel,
+            channel.get_target_contact(), isVideo);
         source.notify(notif);
         context.accept();
     },
 
     _approveFileTransfer: function(account, conn, channel, dispatchOp, context) {
-        let [targetHandle, targetHandleType] = channel.get_handle();
-
-        Shell.get_tp_contacts(conn, [targetHandle],
-                contactFeatures,
-                Lang.bind(this, this._createFileTransferSource, channel, context, dispatchOp));
-
-        context.delay();
-    },
-
-    _createFileTransferSource: function(connection, contacts, failed, channel, context, dispatchOp) {
-        if (contacts.length < 1) {
-            Shell.decline_dispatch_op(context, 'Failed to get file sender');
-            return;
-        }
-
         // Use the icon of the file being transferred
         let gicon = Gio.content_type_get_icon(channel.get_mime_type());
 
@@ -357,7 +287,8 @@ Client.prototype = {
         let source = new ApproverSource(dispatchOp, _("File Transfer"), gicon);
         Main.messageTray.add(source);
 
-        let notif = new FileTransferNotification(source, dispatchOp, channel, contacts[0]);
+        let notif = new FileTransferNotification(source, dispatchOp, channel,
+            channel.get_target_contact());
         source.notify(notif);
         context.accept();
     },
@@ -480,17 +411,14 @@ Client.prototype = {
 
         return this._accountSource;
     }
-};
+});
 
-function ChatSource(account, conn, channel, contact, client) {
-    this._init(account, conn, channel, contact, client);
-}
-
-ChatSource.prototype = {
-    __proto__:  MessageTray.Source.prototype,
+const ChatSource = new Lang.Class({
+    Name: 'ChatSource',
+    Extends: MessageTray.Source,
 
     _init: function(account, conn, channel, contact, client) {
-        MessageTray.Source.prototype._init.call(this, contact.get_alias());
+        this.parent(contact.get_alias());
 
         this.isChat = true;
 
@@ -508,15 +436,9 @@ ChatSource.prototype = {
         this._notification.setUrgency(MessageTray.Urgency.HIGH);
         this._notifyTimeoutId = 0;
 
-        // We ack messages when the message box is collapsed if user has
-        // interacted with it before and so read the messages:
-        // - user clicked on it the tray
-        // - user expanded the notification by hovering over the toaster notification
-        this._shouldAck = false;
-
-        this.connect('summary-item-clicked', Lang.bind(this, this._summaryItemClicked));
-        this._notification.connect('expanded', Lang.bind(this, this._notificationExpanded));
-        this._notification.connect('collapsed', Lang.bind(this, this._notificationCollapsed));
+        // We ack messages when the user expands the new notification or views the summary
+        // notification, in which case the notification is also expanded.
+        this._notification.connect('expanded', Lang.bind(this, this._ackMessages));
 
         this._presence = contact.get_presence_type();
 
@@ -698,7 +620,7 @@ ChatSource.prototype = {
     },
 
     notify: function() {
-        MessageTray.Source.prototype.notify.call(this, this._notification);
+        this.parent(this._notification);
     },
 
     respond: function(text) {
@@ -740,12 +662,12 @@ ChatSource.prototype = {
         if (presence == Tp.ConnectionPresenceType.AVAILABLE) {
             msg = _("%s is online.").format(title);
             shouldNotify = (this._presence == Tp.ConnectionPresenceType.OFFLINE);
-        } else if (presence == Tp.ConnectionPresenceType.OFFLINE ||
-                   presence == Tp.ConnectionPresenceType.EXTENDED_AWAY) {
+        } else if (presence == Tp.ConnectionPresenceType.OFFLINE) {
             presence = Tp.ConnectionPresenceType.OFFLINE;
             msg = _("%s is offline.").format(title);
             shouldNotify = (this._presence != Tp.ConnectionPresenceType.OFFLINE);
-        } else if (presence == Tp.ConnectionPresenceType.AWAY) {
+        } else if (presence == Tp.ConnectionPresenceType.AWAY ||
+                   presence == Tp.ConnectionPresenceType.EXTENDED_AWAY) {
             msg = _("%s is away.").format(title);
             shouldNotify = false;
         } else if (presence == Tp.ConnectionPresenceType.BUSY) {
@@ -780,36 +702,15 @@ ChatSource.prototype = {
         // 'pending-message-removed' for each one.
         this._channel.ack_all_pending_messages_async(Lang.bind(this, function(src, result) {
             this._channel.ack_all_pending_messages_finish(result);}));
-    },
-
-    _summaryItemClicked: function(source, button) {
-        if (button != 1)
-            return;
-
-        this._shouldAck = true;
-    },
-
-    _notificationExpanded: function() {
-        this._shouldAck = true;
-    },
-
-    _notificationCollapsed: function() {
-        if (this._shouldAck)
-            this._ackMessages();
-
-        this._shouldAck = false;
     }
-};
+});
 
-function ChatNotification(source) {
-    this._init(source);
-}
-
-ChatNotification.prototype = {
-    __proto__:  MessageTray.Notification.prototype,
+const ChatNotification = new Lang.Class({
+    Name: 'ChatNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source) {
-        MessageTray.Notification.prototype._init.call(this, source, source.title, null, { customContent: true });
+        this.parent(source, source.title, null, { customContent: true });
         this.setResident(true);
 
         this._responseEntry = new St.Entry({ style_class: 'chat-response',
@@ -900,7 +801,7 @@ ChatNotification.prototype = {
         }
 
         let groups = this._contentArea.get_children();
-        for (let i = 0; i < groups.length; i ++) {
+        for (let i = 0; i < groups.length; i++) {
             let group = groups[i];
             if (group.get_children().length == 0)
                 group.destroy();
@@ -938,7 +839,7 @@ ChatNotification.prototype = {
         let body = highlighter.actor;
 
         let styles = props.styles;
-        for (let i = 0; i < styles.length; i ++)
+        for (let i = 0; i < styles.length; i++)
             body.add_style_class_name(styles[i]);
 
         let group = props.group;
@@ -951,6 +852,8 @@ ChatNotification.prototype = {
         }
 
         this._lastGroupActor.add(body, props.childProps);
+
+        this.updated();
 
         let timestamp = props.timestamp;
         this._history.unshift({ actor: body, time: timestamp,
@@ -1092,17 +995,14 @@ ChatNotification.prototype = {
             this.source.setChatState(Tp.ChannelChatState.ACTIVE);
         }
     }
-};
+});
 
-function ApproverSource(dispatchOp, text, gicon) {
-    this._init(dispatchOp, text, gicon);
-}
-
-ApproverSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const ApproverSource = new Lang.Class({
+    Name: 'ApproverSource',
+    Extends: MessageTray.Source,
 
     _init: function(dispatchOp, text, gicon) {
-        MessageTray.Source.prototype._init.call(this, text);
+        this.parent(text);
 
         this._gicon = gicon;
         this._setSummaryIcon(this.createNotificationIcon());
@@ -1123,7 +1023,7 @@ ApproverSource.prototype = {
             this._invalidId = 0;
         }
 
-        MessageTray.Source.prototype.destroy.call(this);
+        this.parent();
     },
 
     createNotificationIcon: function() {
@@ -1131,23 +1031,19 @@ ApproverSource.prototype = {
                              icon_type: St.IconType.FULLCOLOR,
                              icon_size: this.ICON_SIZE });
     }
-}
+});
 
-function RoomInviteNotification(source, dispatchOp, channel, inviter) {
-    this._init(source, dispatchOp, channel, inviter);
-}
-
-RoomInviteNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const RoomInviteNotification = new Lang.Class({
+    Name: 'RoomInviteNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, dispatchOp, channel, inviter) {
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      /* translators: argument is a room name like
-                                                       * room@jabber.org for example. */
-                                                      _("Invitation to %s").format(channel.get_identifier()),
-                                                      null,
-                                                      { customContent: true });
+        this.parent(source,
+                    /* translators: argument is a room name like
+                     * room@jabber.org for example. */
+                    _("Invitation to %s").format(channel.get_identifier()),
+                    null,
+                    { customContent: true });
         this.setResident(true);
 
         /* translators: first argument is the name of a contact and the second
@@ -1174,15 +1070,12 @@ RoomInviteNotification.prototype = {
             this.destroy();
         }));
     }
-};
+});
 
 // Audio Video
-function AudioVideoNotification(source, dispatchOp, channel, contact, isVideo) {
-    this._init(source, dispatchOp, channel, contact, isVideo);
-}
-
-AudioVideoNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const AudioVideoNotification = new Lang.Class({
+    Name: 'AudioVideoNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, dispatchOp, channel, contact, isVideo) {
         let title = '';
@@ -1194,11 +1087,7 @@ AudioVideoNotification.prototype = {
              /* translators: argument is a contact name like Alice for example. */
             title = _("Call from %s").format(contact.get_alias());
 
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      title,
-                                                      null,
-                                                      { customContent: true });
+        this.parent(source, title, null, { customContent: true });
         this.setResident(true);
 
         this.addButton('reject', _("Reject"));
@@ -1221,28 +1110,24 @@ AudioVideoNotification.prototype = {
             this.destroy();
         }));
     }
-};
+});
 
 // File Transfer
-function FileTransferNotification(source, dispatchOp, channel, contact) {
-    this._init(source, dispatchOp, channel, contact);
-}
-
-FileTransferNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const FileTransferNotification = new Lang.Class({
+    Name: 'FileTransferNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, dispatchOp, channel, contact) {
-        MessageTray.Notification.prototype._init.call(this,
-                                                      source,
-                                                      /* To translators: The first parameter is
-                                                       * the contact's alias and the second one is the
-                                                       * file name. The string will be something
-                                                       * like: "Alice is sending you test.ogg"
-                                                       */
-                                                      _("%s is sending you %s").format(contact.get_alias(),
-                                                                                       channel.get_filename()),
-                                                      null,
-                                                      { customContent: true });
+        this.parent(source,
+                    /* To translators: The first parameter is
+                     * the contact's alias and the second one is the
+                     * file name. The string will be something
+                     * like: "Alice is sending you test.ogg"
+                     */
+                    _("%s is sending you %s").format(contact.get_alias(),
+                                                     channel.get_filename()),
+                    null,
+                    { customContent: true });
         this.setResident(true);
 
         this.addButton('decline', _("Decline"));
@@ -1264,18 +1149,15 @@ FileTransferNotification.prototype = {
             this.destroy();
         }));
     }
-};
+});
 
 // A notification source that can embed multiple notifications
-function MultiNotificationSource(title, icon) {
-    this._init(title, icon);
-}
-
-MultiNotificationSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const MultiNotificationSource = new Lang.Class({
+    Name: 'MultiNotificationSource',
+    Extends: MessageTray.Source,
 
     _init: function(title, icon) {
-        MessageTray.Source.prototype._init.call(this, title);
+        this.parent(title);
 
         this._icon = icon;
         this._setSummaryIcon(this.createNotificationIcon());
@@ -1283,7 +1165,7 @@ MultiNotificationSource.prototype = {
     },
 
     notify: function(notification) {
-        MessageTray.Source.prototype.notify.call(this, notification);
+        this.parent(notification);
 
         this._nbNotifications += 1;
 
@@ -1297,25 +1179,22 @@ MultiNotificationSource.prototype = {
     },
 
     createNotificationIcon: function() {
-        return new St.Icon({ gicon: Shell.util_icon_from_string(this._icon),
+        return new St.Icon({ gicon: Gio.icon_new_for_string(this._icon),
                              icon_type: St.IconType.FULLCOLOR,
                              icon_size: this.ICON_SIZE });
     }
-};
+});
 
 // Subscription request
-function SubscriptionRequestNotification(source, contact) {
-    this._init(source, contact);
-}
-
-SubscriptionRequestNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const SubscriptionRequestNotification = new Lang.Class({
+    Name: 'SubscriptionRequestNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, contact) {
-        MessageTray.Notification.prototype._init.call(this, source,
-            /* To translators: The parameter is the contact's alias */
-            _("%s would like permission to see when you are online").format(contact.get_alias()),
-            null, { customContent: true });
+        this.parent(source,
+                    /* To translators: The parameter is the contact's alias */
+                    _("%s would like permission to see when you are online").format(contact.get_alias()),
+                    null, { customContent: true });
 
         this._contact = contact;
         this._connection = contact.get_connection();
@@ -1389,7 +1268,7 @@ SubscriptionRequestNotification.prototype = {
             this._invalidatedId = 0;
         }
 
-        MessageTray.Notification.prototype.destroy.call(this);
+        this.parent();
     },
 
     _subscriptionStatesChangedCb: function(contact, subscribe, publish, msg) {
@@ -1398,12 +1277,7 @@ SubscriptionRequestNotification.prototype = {
         if (publish != Tp.SubscriptionState.ASK)
             this.destroy();
     }
-};
-
-
-function AccountNotification(source, account, connectionError) {
-    this._init(source, account, connectionError);
-}
+});
 
 // Messages from empathy/libempathy/empathy-utils.c
 // create_errors_to_message_hash()
@@ -1444,7 +1318,7 @@ _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.CONNECTION_FAILED)]
 _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.CONNECTION_LOST)]
   = _("Connection has been lost");
 _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.ALREADY_CONNECTED)]
-  = _("This resource is already connected to the server");
+  = _("This account is already connected to the server");
 _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.CONNECTION_REPLACED)]
   = _("Connection has been replaced by a new connection using the same resource");
 _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.REGISTRATION_EXISTS)]
@@ -1457,16 +1331,19 @@ _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.CERT_INSECURE)]
   = _("Certificate uses an insecure cipher algorithm or is cryptographically weak");
 _connectionErrorMessages[Tp.error_get_dbus_name(Tp.Error.CERT_LIMIT_EXCEEDED)]
   = _("The length of the server certificate, or the depth of the server certificate chain, exceed the limits imposed by the cryptography library");
+_connectionErrorMessages['org.freedesktop.DBus.Error.NoReply']
+  = _("Internal error");
 
-AccountNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const AccountNotification = new Lang.Class({
+    Name: 'AccountNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, account, connectionError) {
-        MessageTray.Notification.prototype._init.call(this, source,
-            /* translators: argument is the account name, like
-             * name@jabber.org for example. */
-            _("Connection to %s failed").format(account.get_display_name()),
-            null, { customContent: true });
+        this.parent(source,
+                    /* translators: argument is the account name, like
+                     * name@jabber.org for example. */
+                    _("Connection to %s failed").format(account.get_display_name()),
+                    null, { customContent: true });
 
         this._label = new St.Label();
         this.addActor(this._label);
@@ -1542,6 +1419,6 @@ AccountNotification.prototype = {
             this._connectionStatusId = 0;
         }
 
-        MessageTray.Notification.prototype.destroy.call(this);
+        this.parent();
     }
-};
+});

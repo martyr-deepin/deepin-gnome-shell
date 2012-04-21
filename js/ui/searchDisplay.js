@@ -15,11 +15,9 @@ const Search = imports.ui.search;
 const MAX_SEARCH_RESULTS_ROWS = 1;
 
 
-function SearchResult(provider, metaInfo, terms) {
-    this._init(provider, metaInfo, terms);
-}
+const SearchResult = new Lang.Class({
+    Name: 'SearchResult',
 
-SearchResult.prototype = {
     _init: function(provider, metaInfo, terms) {
         this.provider = provider;
         this.metaInfo = metaInfo;
@@ -34,6 +32,7 @@ SearchResult.prototype = {
         if (content == null) {
             content = new St.Bin({ style_class: 'search-result-content',
                                    reactive: true,
+                                   can_focus: true,
                                    track_hover: true });
             let icon = new IconGrid.BaseIcon(this.metaInfo['name'],
                                              { createIcon: this.metaInfo['createIcon'] });
@@ -97,96 +96,87 @@ SearchResult.prototype = {
         else
             this.provider.activateResult(this.metaInfo.id, params);
     }
-};
+});
 
 
-function GridSearchResults(provider, grid) {
-    this._init(provider, grid);
-}
-
-GridSearchResults.prototype = {
-    __proto__: Search.SearchResultDisplay.prototype,
+const GridSearchResults = new Lang.Class({
+    Name: 'GridSearchResults',
+    Extends: Search.SearchResultDisplay,
 
     _init: function(provider, grid) {
-        Search.SearchResultDisplay.prototype._init.call(this, provider);
+        this.parent(provider);
+
         this._grid = grid || new IconGrid.IconGrid({ rowLimit: MAX_SEARCH_RESULTS_ROWS,
                                                      xAlign: St.Align.START });
         this.actor = new St.Bin({ x_align: St.Align.START });
 
         this.actor.set_child(this._grid.actor);
-        this.selectionIndex = -1;
         this._width = 0;
         this.actor.connect('notify::width', Lang.bind(this, function() {
             this._width = this.actor.width;
             Meta.later_add(Meta.LaterType.BEFORE_REDRAW, Lang.bind(this, function() {
-                this._tryAddResults();
+                let results = this.getResultsForDisplay();
+                if (results.length == 0)
+                    return;
+
+                if (provider.async) {
+                    provider.getResultMetasAsync(results,
+                                                 Lang.bind(this, this.renderResults));
+                } else {
+                    let metas = provider.getResultMetas(results);
+                    this.renderResults(metas);
+                }
             }));
         }));
         this._notDisplayedResult = [];
         this._terms = [];
+        this._pendingClear = false;
     },
 
-    _tryAddResults: function() {
+    getResultsForDisplay: function() {
+        let alreadyVisible = this._pendingClear ? 0 : this._grid.visibleItemsCount();
         let canDisplay = this._grid.childrenInRow(this._width) * MAX_SEARCH_RESULTS_ROWS
-                         - this._grid.visibleItemsCount();
+                         - alreadyVisible;
 
-        for (let i = Math.min(this._notDisplayedResult.length, canDisplay); i > 0; i--) {
-            let result = this._notDisplayedResult.shift();
-            let meta = this.provider.getResultMeta(result);
-            let display = new SearchResult(this.provider, meta, this._terms);
-            this._grid.addItem(display.actor);
-        }
+        let numResults = Math.min(this._notDisplayedResult.length, canDisplay);
+
+        return this._notDisplayedResult.splice(0, numResults);
     },
 
     getVisibleResultCount: function() {
         return this._grid.visibleItemsCount();
     },
 
-    renderResults: function(results, terms) {
+    setResults: function(results, terms) {
         // copy the lists
         this._notDisplayedResult = results.slice(0);
         this._terms = terms.slice(0);
-        this._tryAddResults();
+        this._pendingClear = true;
+    },
+
+    renderResults: function(metas) {
+        for (let i = 0; i < metas.length; i++) {
+            let display = new SearchResult(this.provider, metas[i], this._terms);
+            this._grid.addItem(display.actor);
+        }
     },
 
     clear: function () {
-        this._terms = [];
-        this._notDisplayedResult = [];
         this._grid.removeAll();
-        this.selectionIndex = -1;
+        this._pendingClear = false;
     },
 
-    selectIndex: function (index) {
-        let nVisible = this.getVisibleResultCount();
-        if (this.selectionIndex >= 0) {
-            let prevActor = this._grid.getItemAtIndex(this.selectionIndex);
-            prevActor._delegate.setSelected(false);
-        }
-        this.selectionIndex = -1;
-        if (index >= nVisible)
-            return false;
-        else if (index < 0)
-            return false;
-        let targetActor = this._grid.getItemAtIndex(index);
-        targetActor._delegate.setSelected(true);
-        this.selectionIndex = index;
-        return true;
-    },
-
-    activateSelected: function() {
-        if (this.selectionIndex < 0)
-            return;
-        let targetActor = this._grid.getItemAtIndex(this.selectionIndex);
-        targetActor._delegate.activate();
+    getFirstResult: function() {
+        if (this.getVisibleResultCount() > 0)
+            return this._grid.getItemAtIndex(0)._delegate;
+        else
+            return null;
     }
-};
+});
 
+const SearchResults = new Lang.Class({
+    Name: 'SearchResults',
 
-function SearchResults(searchSystem, openSearchSystem) {
-    this._init(searchSystem, openSearchSystem);
-}
-
-SearchResults.prototype = {
     _init: function(searchSystem, openSearchSystem) {
         this._searchSystem = searchSystem;
         this._searchSystem.connect('search-updated', Lang.bind(this, this._updateCurrentResults));
@@ -222,7 +212,6 @@ SearchResults.prototype = {
 
         this._statusText = new St.Label({ style_class: 'search-statustext' });
         this._content.add(this._statusText);
-        this._selectedProvider = -1;
         this._providers = this._searchSystem.getProviders();
         this._providerMeta = [];
         this._providerMetaResults = {};
@@ -236,10 +225,12 @@ SearchResults.prototype = {
         this._openSearchProviders = [];
         this._openSearchSystem.connect('changed', Lang.bind(this, this._updateOpenSearchProviderButtons));
         this._updateOpenSearchProviderButtons();
+
+        this._highlightDefault = false;
+        this._defaultResult = null;
     },
 
     _updateOpenSearchProviderButtons: function() {
-        this._selectedOpenSearchButton = -1;
         for (let i = 0; i < this._openSearchProviders.length; i++)
             this._openSearchProviders[i].actor.destroy();
         this._openSearchProviders = this._openSearchSystem.getProviders();
@@ -247,18 +238,10 @@ SearchResults.prototype = {
             this._createOpenSearchProviderButton(this._openSearchProviders[i]);
     },
 
-    _updateOpenSearchButtonState: function() {
-         for (let i = 0; i < this._openSearchProviders.length; i++) {
-             if (i == this._selectedOpenSearchButton)
-                 this._openSearchProviders[i].actor.add_style_pseudo_class('selected');
-             else
-                 this._openSearchProviders[i].actor.remove_style_pseudo_class('selected');
-         }
-    },
-
     _createOpenSearchProviderButton: function(provider) {
         let button = new St.Button({ style_class: 'dash-search-button',
                                      reactive: true,
+                                     can_focus: true,
                                      x_fill: true,
                                      y_align: St.Align.MIDDLE });
         let bin = new St.Bin({ x_fill: false,
@@ -273,6 +256,17 @@ SearchResults.prototype = {
         bin.set_child(title);
         button.set_child(bin);
         provider.actor = button;
+
+        button.setSelected = function(selected) {
+            if (selected)
+                button.add_style_pseudo_class('selected');
+            else
+                button.remove_style_pseudo_class('selected');
+        };
+        button.activate = Lang.bind(this, function() {
+            this._openSearchSystem.activateResult(provider.id);
+        });
+        button.actor = button;
 
         this._searchProvidersBox.add(button);
     },
@@ -296,7 +290,8 @@ SearchResults.prototype = {
 
         this._providerMeta.push({ provider: provider,
                                   actor: providerBox,
-                                  resultDisplay: resultDisplay });
+                                  resultDisplay: resultDisplay,
+                                  hasPendingResults: false });
         this._content.add(providerBox);
     },
 
@@ -312,7 +307,6 @@ SearchResults.prototype = {
     },
 
     _clearDisplay: function() {
-        this._selectedProvider = -1;
         this._visibleResultsCount = 0;
         for (let i = 0; i < this._providerMeta.length; i++) {
             let meta = this._providerMeta[i];
@@ -321,8 +315,8 @@ SearchResults.prototype = {
         }
     },
 
-    _clearDisplayForProvider: function(index) {
-        let meta = this._providerMeta[index];
+    _clearDisplayForProvider: function(provider) {
+        let meta = this._metaForProvider(provider);
         meta.resultDisplay.clear();
         meta.actor.hide();
     },
@@ -331,8 +325,6 @@ SearchResults.prototype = {
         this._searchSystem.reset();
         this._statusText.hide();
         this._clearDisplay();
-        this._selectedOpenSearchButton = -1;
-        this._updateOpenSearchButtonState();
     },
 
     startingSearch: function() {
@@ -349,13 +341,73 @@ SearchResults.prototype = {
         return this._providerMeta[this._providers.indexOf(provider)];
     },
 
-    _updateCurrentResults: function(searchSystem, provider, results) {
+    _maybeSetInitialSelection: function() {
+        let newDefaultResult = null;
+
+        for (let i = 0; i < this._providerMeta.length; i++) {
+            let meta = this._providerMeta[i];
+            if (meta.hasPendingResults)
+                return;
+
+            if (!meta.actor.visible)
+                continue;
+
+            let firstResult = meta.resultDisplay.getFirstResult();
+            if (firstResult) {
+                newDefaultResult = firstResult;
+                break; // select this one!
+            }
+        }
+
+        if (!newDefaultResult)
+            newDefaultResult = this._searchProvidersBox.get_first_child();
+
+        if (newDefaultResult != this._defaultResult) {
+            if (this._defaultResult)
+                this._defaultResult.setSelected(false);
+            if (newDefaultResult)
+                newDefaultResult.setSelected(this._highlightDefault);
+
+            this._defaultResult = newDefaultResult;
+        }
+    },
+
+    _updateCurrentResults: function(searchSystem, results) {
         let terms = searchSystem.getTerms();
+        let [provider, providerResults] = results;
         let meta = this._metaForProvider(provider);
-        meta.resultDisplay.clear();
-        meta.actor.show();
-        meta.resultDisplay.renderResults(results, terms);
-        return true;
+        meta.hasPendingResults = false;
+        this._updateProviderResults(provider, providerResults, terms);
+    },
+
+    _updateProviderResults: function(provider, providerResults, terms) {
+        let meta = this._metaForProvider(provider);
+        if (providerResults.length == 0) {
+            this._clearDisplayForProvider(provider);
+            meta.resultDisplay.setResults([], []);
+        } else {
+            this._providerMetaResults[provider.title] = providerResults;
+            meta.resultDisplay.setResults(providerResults, terms);
+            let results = meta.resultDisplay.getResultsForDisplay();
+
+            if (provider.async) {
+                provider.getResultMetasAsync(results, Lang.bind(this,
+                    function(metas) {
+                        this._clearDisplayForProvider(provider);
+                        meta.actor.show();
+                        this._content.hide();
+                        meta.resultDisplay.renderResults(metas);
+                        this._maybeSetInitialSelection();
+                        this._content.show();
+                    }));
+            } else {
+                let metas = provider.getResultMetas(results);
+                this._clearDisplayForProvider(provider);
+                meta.actor.show();
+                meta.resultDisplay.renderResults(metas);
+            }
+        }
+        this._maybeSetInitialSelection();
     },
 
     _updateResults: function(searchSystem, results) {
@@ -363,127 +415,57 @@ SearchResults.prototype = {
             this._statusText.set_text(_("No matching results."));
             this._statusText.show();
         } else {
-            this._selectedOpenSearchButton = -1;
-            this._updateOpenSearchButtonState();
             this._statusText.hide();
         }
 
         let terms = searchSystem.getTerms();
         this._openSearchSystem.setSearchTerms(terms);
 
-        // To avoid CSS transitions causing flickering
-        // of the selection when the first search result
-        // stays the same, we hide the content while
-        // filling in the results and setting the initial
-        // selection.
+        // To avoid CSS transitions causing flickering when the first search
+        // result stays the same, we hide the content while filling in the
+        // results.
         this._content.hide();
 
         for (let i = 0; i < results.length; i++) {
             let [provider, providerResults] = results[i];
-            if (providerResults.length == 0) {
-                this._clearDisplayForProvider(i);
-            } else {
-                this._providerMetaResults[provider.title] = providerResults;
-                this._clearDisplayForProvider(i);
-                let meta = this._metaForProvider(provider);
-                meta.actor.show();
-                meta.resultDisplay.renderResults(providerResults, terms);
-            }
+            let meta = this._metaForProvider(provider);
+            meta.hasPendingResults = provider.async;
+            if (!meta.hasPendingResults)
+                this._updateProviderResults(provider, providerResults, terms);
         }
-
-        if (this._selectedOpenSearchButton == -1)
-            this.selectDown(false);
 
         this._content.show();
 
         return true;
     },
 
-    _modifyActorSelection: function(resultDisplay, up) {
-        let success;
-        let index = resultDisplay.getSelectionIndex();
-        if (up && index == -1)
-            index = resultDisplay.getVisibleResultCount() - 1;
-        else if (up)
-            index = index - 1;
-        else
-            index = index + 1;
-        return resultDisplay.selectIndex(index);
+    activateDefault: function() {
+        if (this._defaultResult)
+            this._defaultResult.activate();
     },
 
-    selectUp: function(recursing) {
-        if (this._selectedOpenSearchButton == -1) {
-            for (let i = this._selectedProvider; i >= 0; i--) {
-                let meta = this._providerMeta[i];
-                if (!meta.actor.visible)
-                    continue;
-                let success = this._modifyActorSelection(meta.resultDisplay, true);
-                if (success) {
-                    this._selectedProvider = i;
-                    return;
-                }
-            }
-        }
-
-        if (this._selectedOpenSearchButton == -1)
-            this._selectedOpenSearchButton = this._openSearchProviders.length;
-        this._selectedOpenSearchButton--;
-        this._updateOpenSearchButtonState();
-        if (this._selectedOpenSearchButton >= 0)
-            return;
-
-        if (this._providerMeta.length > 0 && !recursing) {
-            this._selectedProvider = this._providerMeta.length - 1;
-            this.selectUp(true);
-        }
+    highlightDefault: function(highlight) {
+        this._highlightDefault = highlight;
+        if (this._defaultResult)
+            this._defaultResult.setSelected(highlight);
     },
 
-    selectDown: function(recursing) {
-        let current = this._selectedProvider;
-        if (this._selectedOpenSearchButton == -1) {
-            if (current == -1)
-                current = 0;
-            for (let i = current; i < this._providerMeta.length; i++) {
-                let meta = this._providerMeta[i];
-                if (!meta.actor.visible)
-                    continue;
-                 let success = this._modifyActorSelection(meta.resultDisplay, false);
-                 if (success) {
-                    this._selectedProvider = i;
-                    return;
-                 }
-            }
-        }
-        this._selectedOpenSearchButton++;
-
-        if (this._selectedOpenSearchButton < this._openSearchProviders.length) {
-            this._updateOpenSearchButtonState();
+    navigateFocus: function(direction) {
+        let rtl = this.actor.get_text_direction() == Clutter.TextDirection.RTL;
+        if (direction == Gtk.DirectionType.TAB_BACKWARD ||
+            direction == (rtl ? Gtk.DirectionType.RIGHT
+                              : Gtk.DirectionType.LEFT) ||
+            direction == Gtk.DirectionType.UP) {
+            this.actor.navigate_focus(null, direction, false);
             return;
         }
 
-        this._selectedOpenSearchButton = -1;
-        this._updateOpenSearchButtonState();
-
-        if (this._providerMeta.length > 0 && !recursing) {
-            this._selectedProvider = 0;
-            this.selectDown(true);
+        let from = this._defaultResult ? this._defaultResult.actor : null;
+        this.actor.navigate_focus(from, direction, false);
+        if (this._defaultResult) {
+            // The default result appears focused, so navigate directly to the
+            // next result.
+            this.actor.navigate_focus(global.stage.key_focus, direction, false);
         }
-    },
-
-    activateSelected: function() {
-        if (this._selectedOpenSearchButton != -1) {
-            let provider = this._openSearchProviders[this._selectedOpenSearchButton];
-            this._openSearchSystem.activateResult(provider.id);
-            Main.overview.hide();
-            return;
-        }
-
-        let current = this._selectedProvider;
-        if (current < 0)
-            return;
-        let meta = this._providerMeta[current];
-        let resultDisplay = meta.resultDisplay;
-        resultDisplay.activateSelected();
-        Main.overview.hide();
     }
-};
+});

@@ -21,11 +21,9 @@ const POPUP_ANIMATION_TIME = 0.15;
  * placed.  The arrow position may be controlled via setArrowOrigin().
  *
  */
-function BoxPointer(side, binProperties) {
-    this._init(side, binProperties);
-}
+const BoxPointer = new Lang.Class({
+    Name: 'BoxPointer',
 
-BoxPointer.prototype = {
     _init: function(arrowSide, binProperties) {
         this._arrowSide = arrowSide;
         this._arrowOrigin = 0;
@@ -47,6 +45,21 @@ BoxPointer.prototype = {
         this._xPosition = 0;
         this._yPosition = 0;
         this._sourceAlignment = 0.5;
+        this._capturedEventId = 0;
+        this._muteInput();
+    },
+
+    _muteInput: function() {
+        if (this._capturedEventId == 0)
+            this._capturedEventId = this.actor.connect('captured-event',
+                                                       function() { return true; });
+    },
+
+    _unmuteInput: function() {
+        if (this._capturedEventId != 0) {
+            this.actor.disconnect(this._capturedEventId);
+            this._capturedEventId = 0;
+        }
     },
 
     show: function(animate, onComplete) {
@@ -77,7 +90,11 @@ BoxPointer.prototype = {
                                  xOffset: 0,
                                  yOffset: 0,
                                  transition: 'linear',
-                                 onComplete: onComplete,
+                                 onComplete: Lang.bind(this, function() {
+                                     this._unmuteInput();
+                                     if (onComplete)
+                                         onComplete();
+                                 }),
                                  time: POPUP_ANIMATION_TIME });
     },
 
@@ -103,6 +120,8 @@ BoxPointer.prototype = {
                     break;
             }
         }
+
+        this._muteInput();
 
         Tweener.addTween(this, { opacity: 0,
                                  xOffset: xOffset,
@@ -452,4 +471,4 @@ BoxPointer.prototype = {
     get opacity() {
         return this.actor.opacity;
     }
-};
+});

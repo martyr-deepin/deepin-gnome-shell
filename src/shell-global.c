@@ -15,6 +15,7 @@
 #endif
 
 #include <X11/extensions/Xfixes.h>
+#include <cogl-pango/cogl-pango.h>
 #include <canberra.h>
 #include <clutter/glx/clutter-glx.h>
 #include <clutter/x11/clutter-x11.h>
@@ -24,6 +25,7 @@
 #include <girepository.h>
 #include <meta/display.h>
 #include <meta/util.h>
+#include <meta/meta-shaped-texture.h>
 
 /* Memory report bits */
 #ifdef HAVE_MALLINFO
@@ -33,7 +35,6 @@
 #include "shell-enum-types.h"
 #include "shell-global-private.h"
 #include "shell-jsapi-compat-private.h"
-#include "shell-marshal.h"
 #include "shell-perf-log.h"
 #include "shell-window-tracker.h"
 #include "shell-wm.h"
@@ -310,8 +311,7 @@ shell_global_class_init (ShellGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    _shell_marshal_VOID__INT_INT,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 2, G_TYPE_INT, G_TYPE_INT);
 
   /* Emitted from gnome-shell-plugin.c during event handling */
@@ -320,8 +320,7 @@ shell_global_class_init (ShellGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   /* Emitted from gnome-shell-plugin.c during event handling */
@@ -330,8 +329,7 @@ shell_global_class_init (ShellGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    g_cclosure_marshal_VOID__VOID,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 0);
 
   shell_global_signals[NOTIFY_ERROR] =
@@ -339,8 +337,7 @@ shell_global_class_init (ShellGlobalClass *klass)
                     G_TYPE_FROM_CLASS (klass),
                     G_SIGNAL_RUN_LAST,
                     0,
-                    NULL, NULL,
-                    gi_cclosure_marshal_generic,
+                    NULL, NULL, NULL,
                     G_TYPE_NONE, 2,
                     G_TYPE_STRING,
                     G_TYPE_STRING);
@@ -565,14 +562,18 @@ void
 shell_global_set_stage_input_mode (ShellGlobal         *global,
                                    ShellStageInputMode  mode)
 {
+  MetaScreen *screen;
+
   g_return_if_fail (SHELL_IS_GLOBAL (global));
 
+  screen = meta_plugin_get_screen (global->plugin);
+
   if (mode == SHELL_STAGE_INPUT_MODE_NONREACTIVE || global->gtk_grab_active)
-    meta_plugin_set_stage_reactive (global->plugin, FALSE);
+    meta_empty_stage_input_region (screen);
   else if (mode == SHELL_STAGE_INPUT_MODE_FULLSCREEN || !global->input_region)
-    meta_plugin_set_stage_reactive (global->plugin, TRUE);
+    meta_set_stage_input_region (screen, None);
   else
-    meta_plugin_set_stage_input_region (global->plugin, global->input_region);
+    meta_set_stage_input_region (screen, global->input_region);
 
   if (mode == SHELL_STAGE_INPUT_MODE_FOCUSED)
     shell_global_focus_stage (global);
@@ -636,6 +637,7 @@ shell_global_set_cursor (ShellGlobal *global,
           break;
         case SHELL_CURSOR_POINTING_HAND:
           cursor_type = GDK_HAND2;
+          break;
         case SHELL_CURSOR_DND_UNSUPPORTED_TARGET:
           cursor_type = GDK_X_CURSOR;
           break;
@@ -647,7 +649,7 @@ shell_global_set_cursor (ShellGlobal *global,
 
   gdk_window_set_cursor (global->stage_gdk_window, cursor);
 
-  gdk_cursor_unref (cursor);
+  g_object_unref (cursor);
 }
 
 /**
@@ -704,6 +706,17 @@ shell_global_set_stage_input_region (ShellGlobal *global,
    * should actually change the input region right now.
    */
   shell_global_set_stage_input_mode (global, global->input_mode);
+}
+
+/**
+ * shell_global_get_stage:
+ *
+ * Return value: (transfer none): The default #ClutterStage
+ */
+ClutterStage *
+shell_global_get_stage (ShellGlobal  *global)
+{
+  return global->stage;
 }
 
 /**
@@ -792,6 +805,207 @@ global_stage_after_paint (ClutterStage *stage,
                         "clutter.stagePaintDone");
 }
 
+static void
+update_font_options (GtkSettings  *settings,
+                     ClutterStage *stage)
+{
+  StThemeContext *context;
+  ClutterBackend *backend;
+  gint dpi;
+  gint hinting;
+  gchar *hint_style_str;
+  cairo_hint_style_t hint_style = CAIRO_HINT_STYLE_NONE;
+  gint antialias;
+  cairo_antialias_t antialias_mode = CAIRO_ANTIALIAS_NONE;
+  cairo_font_options_t *options;
+
+  g_object_get (settings,
+                "gtk-xft-dpi", &dpi,
+                "gtk-xft-antialias", &antialias,
+                "gtk-xft-hinting", &hinting,
+                "gtk-xft-hintstyle", &hint_style_str,
+                NULL);
+
+  context = st_theme_context_get_for_stage (stage);
+
+  if (dpi != -1)
+    /* GTK stores resolution as 1024 * dots/inch */
+    st_theme_context_set_resolution (context, dpi / 1024);
+  else
+    st_theme_context_set_default_resolution (context);
+
+  /* Clutter (as of 0.9) passes comprehensively wrong font options
+   * override whatever set_font_flags() did above.
+   *
+   * http://bugzilla.openedhand.com/show_bug.cgi?id=1456
+   */
+  backend = clutter_get_default_backend ();
+  options = cairo_font_options_create ();
+
+  cairo_font_options_set_hint_metrics (options, CAIRO_HINT_METRICS_ON);
+
+  if (hinting >= 0 && !hinting)
+    {
+      hint_style = CAIRO_HINT_STYLE_NONE;
+    }
+  else if (hint_style_str)
+    {
+      if (strcmp (hint_style_str, "hintnone") == 0)
+        hint_style = CAIRO_HINT_STYLE_NONE;
+      else if (strcmp (hint_style_str, "hintslight") == 0)
+        hint_style = CAIRO_HINT_STYLE_SLIGHT;
+      else if (strcmp (hint_style_str, "hintmedium") == 0)
+        hint_style = CAIRO_HINT_STYLE_MEDIUM;
+      else if (strcmp (hint_style_str, "hintfull") == 0)
+        hint_style = CAIRO_HINT_STYLE_FULL;
+    }
+
+  g_free (hint_style_str);
+
+  cairo_font_options_set_hint_style (options, hint_style);
+
+  /* We don't want to turn on subpixel anti-aliasing; since Clutter
+   * doesn't currently have the code to support ARGB masks,
+   * generating them then squashing them back to A8 is pointless.
+   */
+  antialias_mode = (antialias < 0 || antialias) ? CAIRO_ANTIALIAS_GRAY
+                                                : CAIRO_ANTIALIAS_NONE;
+
+  cairo_font_options_set_antialias (options, antialias_mode);
+
+  clutter_backend_set_font_options (backend, options);
+  cairo_font_options_destroy (options);
+}
+
+static void
+settings_notify_cb (GtkSettings *settings,
+                    GParamSpec  *pspec,
+                    gpointer     data)
+{
+  update_font_options (settings, CLUTTER_STAGE (data));
+}
+
+static void
+shell_fonts_init (ClutterStage *stage)
+{
+  GtkSettings *settings;
+  CoglPangoFontMap *fontmap;
+
+  /* Disable text mipmapping; it causes problems on pre-GEM Intel
+   * drivers and we should just be rendering text at the right
+   * size rather than scaling it. If we do effects where we dynamically
+   * zoom labels, then we might want to reconsider.
+   */
+  fontmap = COGL_PANGO_FONT_MAP (clutter_get_font_map ());
+  cogl_pango_font_map_set_use_mipmapping (fontmap, FALSE);
+
+  settings = gtk_settings_get_default ();
+  g_object_connect (settings,
+                    "signal::notify::gtk-xft-dpi",
+                    G_CALLBACK (settings_notify_cb), stage,
+                    "signal::notify::gtk-xft-antialias",
+                    G_CALLBACK (settings_notify_cb), stage,
+                    "signal::notify::gtk-xft-hinting",
+                    G_CALLBACK (settings_notify_cb), stage,
+                    "signal::notify::gtk-xft-hintstyle",
+                    G_CALLBACK (settings_notify_cb), stage,
+                    NULL);
+  update_font_options (settings, stage);
+}
+
+/* This is an IBus workaround. The flow of events with IBus is that every time
+ * it gets gets a key event, it:
+ *
+ *  Sends it to the daemon via D-Bus asynchronously
+ *  When it gets an reply, synthesizes a new GdkEvent and puts it into the
+ *   GDK event queue with gdk_event_put(), including
+ *   IBUS_FORWARD_MASK = 1 << 25 in the state to prevent a loop.
+ *
+ * (Normally, IBus uses the GTK+ key snooper mechanism to get the key
+ * events early, but since our key events aren't visible to GTK+ key snoopers,
+ * IBus will instead get the events via the standard
+ * GtkIMContext.filter_keypress() mechanism.)
+ *
+ * There are a number of potential problems here; probably the worst
+ * problem is that IBus doesn't forward the timestamp with the event
+ * so that every key event that gets delivered ends up with
+ * GDK_CURRENT_TIME.  This creates some very subtle bugs; for example
+ * if you have IBus running and a keystroke is used to trigger
+ * launching an application, focus stealing prevention won't work
+ * right. http://code.google.com/p/ibus/issues/detail?id=1184
+ *
+ * In any case, our normal flow of key events is:
+ *
+ *  GDK filter function => clutter_x11_handle_event => clutter actor
+ *
+ * So, if we see a key event that gets delivered via the GDK event handler
+ * function - then we know it must be one of these synthesized events, and
+ * we should push it back to clutter.
+ *
+ * To summarize, the full key event flow with IBus is:
+ *
+ *   GDK filter function
+ *     => Mutter
+ *     => gnome_shell_plugin_xevent_filter()
+ *     => clutter_x11_handle_event()
+ *     => clutter event delivery to actor
+ *     => gtk_im_context_filter_event()
+ *     => sent to IBus daemon
+ *     => response received from IBus daemon
+ *     => gdk_event_put()
+ *     => GDK event handler
+ *     => <this function>
+ *     => clutter_event_put()
+ *     => clutter event delivery to actor
+ *
+ * Anything else we see here we just pass on to the normal GDK event handler
+ * gtk_main_do_event().
+ */
+static void
+gnome_shell_gdk_event_handler (GdkEvent *event_gdk,
+                               gpointer  data)
+{
+  if (event_gdk->type == GDK_KEY_PRESS || event_gdk->type == GDK_KEY_RELEASE)
+    {
+      ClutterActor *stage;
+      Window stage_xwindow;
+
+      stage = CLUTTER_ACTOR (data);
+      stage_xwindow = clutter_x11_get_stage_window (CLUTTER_STAGE (stage));
+
+      if (GDK_WINDOW_XID (event_gdk->key.window) == stage_xwindow)
+        {
+          ClutterDeviceManager *device_manager = clutter_device_manager_get_default ();
+          ClutterInputDevice *keyboard = clutter_device_manager_get_core_device (device_manager,
+                                                                                 CLUTTER_KEYBOARD_DEVICE);
+
+          ClutterEvent *event_clutter = clutter_event_new ((event_gdk->type == GDK_KEY_PRESS) ?
+                                                           CLUTTER_KEY_PRESS : CLUTTER_KEY_RELEASE);
+          event_clutter->key.time = event_gdk->key.time;
+          event_clutter->key.flags = CLUTTER_EVENT_NONE;
+          event_clutter->key.stage = CLUTTER_STAGE (stage);
+          event_clutter->key.source = NULL;
+
+          /* This depends on ClutterModifierType and GdkModifierType being
+           * identical, which they are currently. (They both match the X
+           * modifier state in the low 16-bits and have the same extensions.) */
+          event_clutter->key.modifier_state = event_gdk->key.state;
+
+          event_clutter->key.keyval = event_gdk->key.keyval;
+          event_clutter->key.hardware_keycode = event_gdk->key.hardware_keycode;
+          event_clutter->key.unicode_value = gdk_keyval_to_unicode (event_clutter->key.keyval);
+          event_clutter->key.device = keyboard;
+
+          clutter_event_put (event_clutter);
+          clutter_event_free (event_clutter);
+
+          return;
+        }
+    }
+
+  gtk_main_do_event (event_gdk);
+}
+
 void
 _shell_global_set_plugin (ShellGlobal *global,
                           MetaPlugin  *plugin)
@@ -810,7 +1024,7 @@ _shell_global_set_plugin (ShellGlobal *global,
   global->gdk_screen = gdk_display_get_screen (global->gdk_display,
                                                meta_screen_get_screen_number (global->meta_screen));
 
-  global->stage = CLUTTER_STAGE (meta_plugin_get_stage (plugin));
+  global->stage = CLUTTER_STAGE (meta_get_stage_for_screen (global->meta_screen));
   global->stage_xwindow = clutter_x11_get_stage_window (global->stage);
   global->stage_gdk_window = gdk_x11_window_foreign_new_for_display (global->gdk_display,
                                                                      global->stage_xwindow);
@@ -837,6 +1051,10 @@ _shell_global_set_plugin (ShellGlobal *global,
   g_signal_connect (global->meta_display, "notify::focus-window",
                     G_CALLBACK (focus_window_changed), global);
 
+  shell_fonts_init (global->stage);
+
+  gdk_event_handler_set (gnome_shell_gdk_event_handler, global->stage, NULL);
+
   global->focus_manager = st_focus_manager_get_for_stage (global->stage);
 }
 
@@ -856,18 +1074,18 @@ _shell_global_get_gjs_context (ShellGlobal *global)
  * overview mode or the "looking glass" debug overlay, that block
  * application and normal key shortcuts.
  *
- * Returns value: %TRUE if we succesfully entered the mode. %FALSE if we couldn't
+ * Returns: %TRUE if we succesfully entered the mode. %FALSE if we couldn't
  *  enter the mode. Failure may occur because an application has the pointer
  *  or keyboard grabbed, because Mutter is in a mode itself like moving a
  *  window or alt-Tab window selection, or because shell_global_begin_modal()
  *  was previouly called.
  */
 gboolean
-shell_global_begin_modal (ShellGlobal *global,
-                          guint32      timestamp)
+shell_global_begin_modal (ShellGlobal       *global,
+                          guint32           timestamp,
+                          MetaModalOptions  options)
 {
-  return meta_plugin_begin_modal (global->plugin, global->stage_xwindow,
-                                  None, 0, timestamp);
+  return meta_plugin_begin_modal (global->plugin, global->stage_xwindow, None, options, timestamp);
 }
 
 /**
@@ -884,7 +1102,7 @@ shell_global_end_modal (ShellGlobal *global,
 }
 
 /**
- * shell_global_create_pointer_barrier
+ * shell_global_create_pointer_barrier:
  * @global: a #ShellGlobal
  * @x1: left X coordinate
  * @y1: top Y coordinate
@@ -915,7 +1133,7 @@ shell_global_create_pointer_barrier (ShellGlobal *global,
 }
 
 /**
- * shell_global_destroy_pointer_barrier
+ * shell_global_destroy_pointer_barrier:
  * @global: a #ShellGlobal
  * @barrier: a pointer barrier
  *
@@ -929,70 +1147,6 @@ shell_global_destroy_pointer_barrier (ShellGlobal *global, guint32 barrier)
 
   XFixesDestroyPointerBarrier (global->xdisplay, (PointerBarrier)barrier);
 #endif
-}
-
-
-/**
- * shell_global_add_extension_importer:
- * @target_object_script: JavaScript code evaluating to a target object
- * @target_property: Name of property to use for importer
- * @directory: Source directory:
- * @error: A #GError
- *
- * This function sets a property named @target_property on the object
- * resulting from the evaluation of @target_object_script code, which
- * acts as a GJS importer for directory @directory.
- *
- * Returns: %TRUE on success
- */
-gboolean
-shell_global_add_extension_importer (ShellGlobal *global,
-                                     const char  *target_object_script,
-                                     const char  *target_property,
-                                     const char  *directory,
-                                     GError     **error)
-{
-  jsval target_object;
-  JSContext *context = gjs_context_get_native_context (global->js_context);
-  char *search_path[2] = { 0, 0 };
-
-  JS_BeginRequest (context);
-
-  // This is a bit of a hack; ideally we'd be able to pass our target
-  // object directly into this function, but introspection doesn't
-  // support that at the moment.  Instead evaluate a string to get it.
-  if (!JS_EvaluateScript(context,
-                         JS_GetGlobalObject(context),
-                         target_object_script,
-                         strlen (target_object_script),
-                         "<target_object_script>",
-                         0,
-                         &target_object))
-    {
-      char *message;
-      gjs_log_exception(context,
-                        &message);
-      g_set_error(error,
-                  G_IO_ERROR,
-                  G_IO_ERROR_FAILED,
-                  "%s", message ? message : "(unknown)");
-      g_free(message);
-      goto out_error;
-    }
-
-  if (!JSVAL_IS_OBJECT (target_object))
-    {
-      g_error ("shell_global_add_extension_importer: invalid target object");
-      goto out_error;
-    }
-
-  search_path[0] = (char*)directory;
-  gjs_define_importer (context, JSVAL_TO_OBJECT (target_object), target_property, (const char **)search_path, FALSE);
-  JS_EndRequest (context);
-  return TRUE;
- out_error:
-  JS_EndRequest (context);
-  return FALSE;
 }
 
 /* Code to close all file descriptors before we exec; copied from gspawn.c in GLib.
@@ -1181,12 +1335,13 @@ shell_global_get_memory_info (ShellGlobal        *global,
   JSContext *context;
   gint64 now;
 
-  memset (meminfo, 0, sizeof (meminfo));
 #ifdef HAVE_MALLINFO
   {
     struct mallinfo info = mallinfo ();
     meminfo->glibc_uordblks = info.uordblks;
   }
+#else
+  meminfo->glibc_uordblks = 0;
 #endif
 
   context = gjs_context_get_native_context (global->js_context);
@@ -1280,9 +1435,17 @@ shell_global_get_pointer (ShellGlobal         *global,
                           int                 *y,
                           ClutterModifierType *mods)
 {
+  GdkDeviceManager *gmanager;
+  GdkDevice *gdevice;
+  GdkScreen *gscreen;
   GdkModifierType raw_mods;
 
-  gdk_display_get_pointer (global->gdk_display, NULL, x, y, &raw_mods);
+  gmanager = gdk_display_get_device_manager (global->gdk_display);
+  gdevice = gdk_device_manager_get_client_pointer (gmanager);
+  gdk_device_get_position (gdevice, &gscreen, x, y);
+  gdk_device_get_state (gdevice,
+                        gdk_screen_get_root_window (gscreen),
+                        NULL, &raw_mods);
   *mods = raw_mods & GDK_MODIFIER_MASK;
 }
 
@@ -1299,9 +1462,18 @@ shell_global_sync_pointer (ShellGlobal *global)
 {
   int x, y;
   GdkModifierType mods;
+  GdkDeviceManager *gmanager;
+  GdkDevice *gdevice;
+  GdkScreen *gscreen;
   ClutterMotionEvent event;
 
-  gdk_display_get_pointer (global->gdk_display, NULL, &x, &y, &mods);
+  gmanager = gdk_display_get_device_manager (global->gdk_display);
+  gdevice = gdk_device_manager_get_client_pointer (gmanager);
+
+  gdk_device_get_position (gdevice, &gscreen, &x, &y);
+  gdk_device_get_state (gdevice,
+                        gdk_screen_get_root_window (gscreen),
+                        NULL, &mods);
 
   event.type = CLUTTER_MOTION;
   event.time = shell_global_get_current_time (global);
@@ -1403,7 +1575,7 @@ shell_global_create_app_launch_context (ShellGlobal *global)
 {
   GdkAppLaunchContext *context;
 
-  context = gdk_app_launch_context_new ();
+  context = gdk_display_get_app_launch_context (global->gdk_display);
   gdk_app_launch_context_set_timestamp (context, shell_global_get_current_time (global));
 
   // Make sure that the app is opened on the current workspace even if
@@ -1698,235 +1870,6 @@ shell_global_launch_calendar_server (ShellGlobal *global)
   g_free (calendar_server_exe);
 }
 
-static void
-grab_screenshot (ClutterActor *stage,
-                 _screenshot_data *screenshot_data)
-{
-  MetaScreen *screen = shell_global_get_screen (screenshot_data->global);
-  cairo_status_t status;
-  cairo_surface_t *image;
-  guchar *data;
-  int width, height;
-
-  meta_plugin_query_screen_size (screenshot_data->global->plugin, &width, &height);
-  image = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
-  data = cairo_image_surface_get_data (image);
-
-  cogl_flush();
-
-  cogl_read_pixels (0, 0, width, height, COGL_READ_PIXELS_COLOR_BUFFER, CLUTTER_CAIRO_FORMAT_ARGB32, data);
-
-  cairo_surface_mark_dirty (image);
-
-  if (meta_screen_get_n_monitors (screen) > 1)
-    {
-      cairo_region_t *screen_region = cairo_region_create ();
-      cairo_region_t *stage_region;
-      MetaRectangle monitor_rect;
-      cairo_rectangle_int_t stage_rect;
-      int i;
-      cairo_t *cr;
-
-      for (i = meta_screen_get_n_monitors (screen) - 1; i >= 0; i--)
-        {
-          meta_screen_get_monitor_geometry (screen, i, &monitor_rect);
-          cairo_region_union_rectangle (screen_region, (const cairo_rectangle_int_t *) &monitor_rect);
-        }
-
-      stage_rect.x = 0;
-      stage_rect.y = 0;
-      stage_rect.width = width;
-      stage_rect.height = height;
-
-      stage_region = cairo_region_create_rectangle ((const cairo_rectangle_int_t *) &stage_rect);
-      cairo_region_xor (stage_region, screen_region);
-      cairo_region_destroy (screen_region);
-
-      cr = cairo_create (image);
-
-      for (i = 0; i < cairo_region_num_rectangles (stage_region); i++)
-        {
-          cairo_rectangle_int_t rect;
-          cairo_region_get_rectangle (stage_region, i, &rect);
-          cairo_rectangle (cr, (double) rect.x, (double) rect.y, (double) rect.width, (double) rect.height);
-          cairo_fill (cr);
-        }
-
-      cairo_destroy (cr);
-      cairo_region_destroy (stage_region);
-    }
-
-
-  status = cairo_surface_write_to_png (image, screenshot_data->filename);
-  cairo_surface_destroy (image);
-
-  if (screenshot_data->callback)
-    screenshot_data->callback (screenshot_data->global, status == CAIRO_STATUS_SUCCESS);
-
-  g_signal_handlers_disconnect_by_func (stage, (void *)grab_screenshot, (gpointer)screenshot_data);
-  g_free (screenshot_data->filename);
-  g_free (screenshot_data);
-}
-
-static void
-grab_area_screenshot (ClutterActor *stage,
-                      _screenshot_data *screenshot_data)
-{
-  cairo_status_t status;
-  cairo_surface_t *image = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, screenshot_data->width, screenshot_data->height);
-  guchar *data = cairo_image_surface_get_data (image);
-
-  cogl_flush();
-
-  cogl_read_pixels (screenshot_data->x, screenshot_data->y, screenshot_data->width, screenshot_data->height,
-                    COGL_READ_PIXELS_COLOR_BUFFER, CLUTTER_CAIRO_FORMAT_ARGB32, data);
-
-  cairo_surface_mark_dirty (image);
-  status = cairo_surface_write_to_png (image, screenshot_data->filename);
-  cairo_surface_destroy (image);
-
-  if (screenshot_data->callback)
-    screenshot_data->callback (screenshot_data->global, status == CAIRO_STATUS_SUCCESS);
-
-  g_signal_handlers_disconnect_by_func (stage, (void *)grab_area_screenshot, (gpointer)screenshot_data);
-  g_free (screenshot_data->filename);
-  g_free (screenshot_data);
-}
-
-/**
- * shell_global_screenshot:
- * @global: the #ShellGlobal
- * @filename: The filename for the screenshot
- * @callback: (scope async): function to call returning success or failure
- * of the async grabbing
- *
- * Takes a screenshot of the whole screen
- * in @filename as png image.
- *
- */
-void
-shell_global_screenshot (ShellGlobal  *global,
-                        const char *filename,
-                        ShellGlobalScreenshotCallback callback)
-{
-  ClutterActor *stage;
-  _screenshot_data *data = g_new0 (_screenshot_data, 1);
-
-  data->global = global;
-  data->filename = g_strdup (filename);
-  data->callback = callback;
-
-  stage = CLUTTER_ACTOR (meta_plugin_get_stage (global->plugin));
-
-  g_signal_connect_after (stage, "paint", G_CALLBACK (grab_screenshot), (gpointer)data);
-
-  clutter_actor_queue_redraw (stage);
-}
-
-/**
- * shell_global_screenshot_area:
- * @global: the #ShellGlobal
- * @x: The X coordinate of the area
- * @y: The Y coordinate of the area
- * @width: The width of the area
- * @height: The height of the area
- * @filename: The filename for the screenshot
- * @callback: (scope async): function to call returning success or failure
- * of the async grabbing
- *
- * Takes a screenshot of the passed in area and saves it
- * in @filename as png image.
- *
- */
-void
-shell_global_screenshot_area (ShellGlobal  *global,
-                              int x,
-                              int y,
-                              int width,
-                              int height,
-                              const char *filename,
-                              ShellGlobalScreenshotCallback callback)
-{
-  ClutterActor *stage;
-  _screenshot_data *data = g_new0 (_screenshot_data, 1);
-
-  data->global = global;
-  data->filename = g_strdup (filename);
-  data->x = x;
-  data->y = y;
-  data->width = width;
-  data->height = height;
-  data->callback = callback;
-
-  stage = CLUTTER_ACTOR (meta_plugin_get_stage (global->plugin));
-
-  g_signal_connect_after (stage, "paint", G_CALLBACK (grab_area_screenshot), (gpointer)data);
-
-  clutter_actor_queue_redraw (stage);
-}
-
-/**
- * shell_global_screenshot_window:
- * @global: the #ShellGlobal
- * @include_frame: Whether to include the frame or not
- *
- * @filename: The filename for the screenshot
- *
- * Takes a screenshot of the focused window (optionally omitting the frame)
- * in @filename as png image.
- *
- * Return value: success or failure.
- */
-gboolean
-shell_global_screenshot_window (ShellGlobal  *global,
-                                gboolean include_frame,
-                                const char *filename)
-{
-  CoglHandle texture;
-  cairo_surface_t *image;
-  guchar *data;
-
-  MetaScreen *screen = meta_plugin_get_screen (global->plugin);
-  MetaDisplay *display = meta_screen_get_display (screen);
-  MetaWindow *window = meta_display_get_focus_window (display);
-  ClutterActor *window_actor;
-
-  cairo_status_t status;
-
-  window_actor = CLUTTER_ACTOR (meta_window_get_compositor_private (window));
-  texture = clutter_texture_get_cogl_texture (CLUTTER_TEXTURE (meta_window_actor_get_texture (META_WINDOW_ACTOR (window_actor))));
-
-  if (!include_frame)
-    {
-      MetaRectangle *window_rect = meta_window_get_rect (window);
-      texture = cogl_texture_new_from_sub_texture (texture,
-                                                   window_rect->x,
-                                                   window_rect->y,
-                                                   window_rect->width,
-                                                   window_rect->height);
-
-      image = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
-                                          window_rect->width,
-                                          window_rect->height);
-    }
-  else
-    image = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
-                                        clutter_actor_get_width (window_actor),
-                                        clutter_actor_get_height (window_actor));
-
-  data = cairo_image_surface_get_data (image);
-
-  cogl_flush();
-
-  cogl_texture_get_data (texture, CLUTTER_CAIRO_FORMAT_ARGB32, 0, data);
-
-  cairo_surface_mark_dirty (image);
-  status = cairo_surface_write_to_png (image, filename);
-  cairo_surface_destroy (image);
-
-  return status == CAIRO_STATUS_SUCCESS;
-}
-
 /**
  * shell_global_get_session_type:
  * @global: The #ShellGlobal.
@@ -1945,7 +1888,7 @@ shell_global_screenshot_window (ShellGlobal  *global,
  * will enable a login dialog and run in a more confined
  * way. This type is suitable for the display manager.
  *
- * Returns the type of session gnome-shell is providing.
+ * Returns: the type of session gnome-shell is providing.
  */
 ShellSessionType
 shell_global_get_session_type (ShellGlobal  *global)

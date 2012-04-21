@@ -29,6 +29,7 @@ GType shell_global_get_type (void) G_GNUC_CONST;
 
 ShellGlobal   *shell_global_get                       (void);
 
+ClutterStage  *shell_global_get_stage                 (ShellGlobal *global);
 MetaScreen    *shell_global_get_screen                (ShellGlobal *global);
 GdkScreen     *shell_global_get_gdk_screen            (ShellGlobal *global);
 MetaDisplay   *shell_global_get_display               (ShellGlobal *global);
@@ -39,7 +40,8 @@ guint32        shell_global_get_current_time          (ShellGlobal *global);
 
 /* Input/event handling */
 gboolean shell_global_begin_modal            (ShellGlobal         *global,
-                                              guint32              timestamp);
+                                              guint32             timestamp,
+                                              MetaModalOptions    options);
 void     shell_global_end_modal              (ShellGlobal         *global,
                                               guint32              timestamp);
 
@@ -118,12 +120,6 @@ void shell_global_run_at_leisure (ShellGlobal          *global,
 
 
 /* Misc utilities / Shell API */
-gboolean shell_global_add_extension_importer    (ShellGlobal  *global,
-                                                 const char   *target_object_script,
-                                                 const char   *target_property,
-                                                 const char   *directory,
-                                                 GError      **error);
-
 void     shell_global_sync_pointer              (ShellGlobal  *global);
 
 GAppLaunchContext *
@@ -145,23 +141,6 @@ void     shell_global_reexec_self               (ShellGlobal  *global);
 
 void     shell_global_launch_calendar_server    (ShellGlobal  *global);
 
-typedef void (*ShellGlobalScreenshotCallback)  (ShellGlobal *global, gboolean success);
-
-void    shell_global_screenshot_area           (ShellGlobal  *global,
-                                                int x,
-                                                int y,
-                                                int width,
-                                                int height,
-                                                const char *filename,
-                                                ShellGlobalScreenshotCallback callback);
-
-gboolean shell_global_screenshot_window         (ShellGlobal  *global,
-                                                gboolean include_frame,
-                                                const char *filename);
-
-void    shell_global_screenshot                (ShellGlobal  *global,
-                                                const char *filename,
-                                                ShellGlobalScreenshotCallback callback);
 typedef enum {
   SHELL_SESSION_USER,
   SHELL_SESSION_GDM

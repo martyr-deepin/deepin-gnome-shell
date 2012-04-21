@@ -50,11 +50,9 @@ function _setLabelsForMessage(dialog, message) {
 
 /* -------------------------------------------------------- */
 
-function ListItem(app) {
-    this._init(app);
-}
+const ListItem = new Lang.Class({
+    Name: 'ListItem',
 
-ListItem.prototype = {
     _init: function(app) {
         this._app = app;
 
@@ -86,14 +84,12 @@ ListItem.prototype = {
         this.emit('activate');
         this._app.activate();
     }
-};
+});
 Signals.addSignalMethods(ListItem.prototype);
 
-function ShellMountOperation(source, params) {
-    this._init(source, params);
-}
+const ShellMountOperation = new Lang.Class({
+    Name: 'ShellMountOperation',
 
-ShellMountOperation.prototype = {
     _init: function(source, params) {
         params = Params.parse(params, { reaskPassword: false });
 
@@ -190,17 +186,14 @@ ShellMountOperation.prototype = {
 
         this._processesDialog.update(message, processes, choices);
     },
-}
+});
 
-function ShellMountQuestionDialog(icon) {
-    this._init(icon);
-}
-
-ShellMountQuestionDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
+const ShellMountQuestionDialog = new Lang.Class({
+    Name: 'ShellMountQuestionDialog',
+    Extends: ModalDialog.ModalDialog,
 
     _init: function(icon) {
-        ModalDialog.ModalDialog.prototype._init.call(this, { styleClass: 'mount-question-dialog' });
+        this.parent({ styleClass: 'mount-question-dialog' });
 
         let mainContentLayout = new St.BoxLayout();
         this.contentLayout.add(mainContentLayout, { x_fill: true,
@@ -218,6 +211,8 @@ ShellMountQuestionDialog.prototype = {
                               { y_align: St.Align.START });
 
         this.subjectLabel = new St.Label({ style_class: 'mount-question-dialog-subject' });
+        this.subjectLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        this.subjectLabel.clutter_text.line_wrap = true;
 
         messageLayout.add(this.subjectLabel,
                           { y_fill:  false,
@@ -236,19 +231,16 @@ ShellMountQuestionDialog.prototype = {
         _setLabelsForMessage(this, message);
         _setButtonsForChoices(this, choices);
     }
-}
+});
 Signals.addSignalMethods(ShellMountQuestionDialog.prototype);
 
-function ShellMountPasswordSource(message, icon, reaskPassword) {
-    this._init(message, icon, reaskPassword);
-}
-
-ShellMountPasswordSource.prototype = {
-    __proto__: MessageTray.Source.prototype,
+const ShellMountPasswordSource = new Lang.Class({
+    Name: 'ShellMountPasswordSource',
+    Extends: MessageTray.Source,
 
     _init: function(message, icon, reaskPassword) {
         let strings = message.split('\n');
-        MessageTray.Source.prototype._init.call(this, strings[0]);
+        this.parent(strings[0]);
 
         this._notification = new ShellMountPasswordNotification(this, strings, icon, reaskPassword);
 
@@ -256,21 +248,15 @@ ShellMountPasswordSource.prototype = {
         Main.messageTray.add(this);
         this.notify(this._notification);
     },
-}
+});
 Signals.addSignalMethods(ShellMountPasswordSource.prototype);
 
-function ShellMountPasswordNotification(source, strings, icon, reaskPassword) {
-    this._init(source, strings, icon, reaskPassword);
-}
-
-ShellMountPasswordNotification.prototype = {
-    __proto__: MessageTray.Notification.prototype,
+const ShellMountPasswordNotification = new Lang.Class({
+    Name: 'ShellMountPasswordNotification',
+    Extends: MessageTray.Notification,
 
     _init: function(source, strings, icon, reaskPassword) {
-        MessageTray.Notification.prototype._init.call(this, source,
-                                                      strings[0], null,
-                                                      { customContent: true,
-                                                        icon: icon });
+        this.parent(source, strings[0], null, { customContent: true, icon: icon });
 
         // set the notification to transient and urgent, so that it
         // expands out
@@ -305,17 +291,14 @@ ShellMountPasswordNotification.prototype = {
 
         this.source.emit('password-ready', text);
     }
-}
+});
 
-function ShellProcessesDialog(icon) {
-    this._init(icon);
-}
-
-ShellProcessesDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
+const ShellProcessesDialog = new Lang.Class({
+    Name: 'ShellProcessesDialog',
+    Extends: ModalDialog.ModalDialog,
 
     _init: function(icon) {
-        ModalDialog.ModalDialog.prototype._init.call(this, { styleClass: 'show-processes-dialog' });
+        this.parent({ styleClass: 'show-processes-dialog' });
 
         let mainContentLayout = new St.BoxLayout();
         this.contentLayout.add(mainContentLayout, { x_fill: true,
@@ -376,7 +359,7 @@ ShellProcessesDialog.prototype = {
 
     _setAppsForPids: function(pids) {
         // remove all the items
-        this._applicationList.destroy_children();
+        this._applicationList.destroy_all_children();
 
         pids.forEach(Lang.bind(this, function(pid) {
             let tracker = Shell.WindowTracker.get_default();
@@ -401,5 +384,5 @@ ShellProcessesDialog.prototype = {
         _setLabelsForMessage(this, message);
         _setButtonsForChoices(this, choices);
     }
-}
+});
 Signals.addSignalMethods(ShellProcessesDialog.prototype);

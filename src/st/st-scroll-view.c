@@ -59,7 +59,6 @@
  */
 
 #include "st-scroll-view.h"
-#include "st-marshal.h"
 #include "st-scroll-bar.h"
 #include "st-scrollable.h"
 #include "st-scroll-view-fade.h"
@@ -97,7 +96,7 @@ struct _StScrollViewPrivate
   gfloat        row_size;
   gfloat        column_size;
 
-  StScrollViewFade *vfade_effect;
+  StScrollViewFade *fade_effect;
 
   gboolean      row_size_set : 1;
   gboolean      column_size_set : 1;
@@ -155,38 +154,43 @@ st_scroll_view_get_property (GObject    *object,
 }
 
 /**
- * st_scroll_view_update_vfade_effect:
+ * st_scroll_view_update_fade_effect:
  * @self: a #StScrollView
- * @fade_offset: The length of the fade effect, in pixels.
+ * @vfade_offset: The length of the veritcal fade effect, in pixels.
+ * @hfade_offset: The length of the horizontal fade effect, in pixels.
  *
  * Sets the height of the fade area area in pixels. A value of 0
  * disables the effect.
  */
 static void
-st_scroll_view_update_vfade_effect (StScrollView *self,
-                                    float fade_offset)
+st_scroll_view_update_fade_effect (StScrollView *self,
+                                   float vfade_offset,
+                                   float hfade_offset)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (self)->priv;
 
   /* A fade amount of more than 0 enables the effect. */
-  if (fade_offset > 0.)
+  if (vfade_offset > 0. || hfade_offset > 0.)
     {
-      if (priv->vfade_effect == NULL) {
-        priv->vfade_effect = g_object_new (ST_TYPE_SCROLL_VIEW_FADE, NULL);
+      if (priv->fade_effect == NULL) {
+        priv->fade_effect = g_object_new (ST_TYPE_SCROLL_VIEW_FADE, NULL);
 
-        clutter_actor_add_effect_with_name (CLUTTER_ACTOR (self), "vfade",
-                                            CLUTTER_EFFECT (priv->vfade_effect));
+        clutter_actor_add_effect_with_name (CLUTTER_ACTOR (self), "fade",
+                                            CLUTTER_EFFECT (priv->fade_effect));
       }
 
-      g_object_set (priv->vfade_effect,
-                    "fade-offset", fade_offset,
+      g_object_set (priv->fade_effect,
+                    "vfade-offset", vfade_offset,
+                    NULL);
+      g_object_set (priv->fade_effect,
+                    "hfade-offset", hfade_offset,
                     NULL);
     }
    else
     {
-      if (priv->vfade_effect != NULL) {
-        clutter_actor_remove_effect (CLUTTER_ACTOR (self), CLUTTER_EFFECT (priv->vfade_effect));
-        priv->vfade_effect = NULL;
+      if (priv->fade_effect != NULL) {
+        clutter_actor_remove_effect (CLUTTER_ACTOR (self), CLUTTER_EFFECT (priv->fade_effect));
+        priv->fade_effect = NULL;
       }
     }
 
@@ -228,10 +232,10 @@ st_scroll_view_dispose (GObject *object)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (object)->priv;
 
-  if (priv->vfade_effect)
+  if (priv->fade_effect)
     {
-      clutter_actor_remove_effect (CLUTTER_ACTOR (object), CLUTTER_EFFECT (priv->vfade_effect));
-      priv->vfade_effect = NULL;
+      clutter_actor_remove_effect (CLUTTER_ACTOR (object), CLUTTER_EFFECT (priv->fade_effect));
+      priv->fade_effect = NULL;
     }
 
   if (priv->vscroll)
@@ -267,13 +271,13 @@ st_scroll_view_paint (ClutterActor *actor)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (actor)->priv;
 
-  /* StBin will paint the child */
-  CLUTTER_ACTOR_CLASS (st_scroll_view_parent_class)->paint (actor);
+  st_widget_paint_background (ST_WIDGET (actor));
 
-  /* paint our custom children */
-  if (priv->hscrollbar_visible && CLUTTER_ACTOR_IS_VISIBLE (priv->hscroll))
+  if (priv->child)
+    clutter_actor_paint (priv->child);
+  if (priv->hscrollbar_visible)
     clutter_actor_paint (priv->hscroll);
-  if (priv->vscrollbar_visible && CLUTTER_ACTOR_IS_VISIBLE (priv->vscroll))
+  if (priv->vscrollbar_visible)
     clutter_actor_paint (priv->vscroll);
 }
 
@@ -286,10 +290,11 @@ st_scroll_view_pick (ClutterActor       *actor,
   /* Chain up so we get a bounding box pained (if we are reactive) */
   CLUTTER_ACTOR_CLASS (st_scroll_view_parent_class)->pick (actor, color);
 
-  /* paint our custom children */
-  if (priv->hscrollbar_visible && CLUTTER_ACTOR_IS_VISIBLE (priv->hscroll))
+  if (priv->child)
+    clutter_actor_paint (priv->child);
+  if (priv->hscrollbar_visible)
     clutter_actor_paint (priv->hscroll);
-  if (priv->vscrollbar_visible && CLUTTER_ACTOR_IS_VISIBLE (priv->vscroll))
+  if (priv->vscrollbar_visible)
     clutter_actor_paint (priv->vscroll);
 }
 
@@ -382,7 +387,6 @@ st_scroll_view_get_preferred_width (ClutterActor *actor,
       break;
     }
 
-  account_for_vscrollbar = priv->vscrollbar_policy != GTK_POLICY_NEVER;
   if (account_for_vscrollbar)
     {
       float sb_width = get_scrollbar_width (ST_SCROLL_VIEW (actor), for_height);
@@ -492,24 +496,13 @@ st_scroll_view_allocate (ClutterActor          *actor,
                          ClutterAllocationFlags flags)
 {
   ClutterActorBox content_box, child_box;
-  ClutterActorClass *parent_parent_class;
   gfloat avail_width, avail_height, sb_width, sb_height;
   gboolean hscrollbar_visible, vscrollbar_visible;
 
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (actor)->priv;
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
 
-  /* Chain up to the parent's parent class
-   *
-   * We do this because we do not want StBin to allocate the child, as we
-   * give it a different allocation later, depending on whether the scrollbars
-   * are visible
-   */
-  parent_parent_class
-    = g_type_class_peek_parent (st_scroll_view_parent_class);
-
-  CLUTTER_ACTOR_CLASS (parent_parent_class)->
-  allocate (actor, box, flags);
+  clutter_actor_set_allocation (actor, box, flags);
 
   st_theme_node_get_content_box (theme_node, box, &content_box);
 
@@ -594,7 +587,7 @@ st_scroll_view_allocate (ClutterActor          *actor,
   /* Vertical scrollbar */
   if (CLUTTER_ACTOR_IS_VISIBLE (priv->vscroll))
     {
-      if (st_widget_get_direction (ST_WIDGET (actor)) == ST_TEXT_DIRECTION_RTL)
+      if (clutter_actor_get_text_direction (actor) == CLUTTER_TEXT_DIRECTION_RTL)
         {
           child_box.x1 = content_box.x1;
           child_box.x2 = content_box.x1 + sb_width;
@@ -613,7 +606,7 @@ st_scroll_view_allocate (ClutterActor          *actor,
   /* Horizontal scrollbar */
   if (CLUTTER_ACTOR_IS_VISIBLE (priv->hscroll))
     {
-      if (st_widget_get_direction (ST_WIDGET (actor)) == ST_TEXT_DIRECTION_RTL)
+      if (clutter_actor_get_text_direction (actor) == CLUTTER_TEXT_DIRECTION_RTL)
         {
           child_box.x1 = content_box.x1 + (vscrollbar_visible ? sb_width : 0);
           child_box.x2 = content_box.x2;
@@ -638,7 +631,7 @@ st_scroll_view_allocate (ClutterActor          *actor,
     sb_width = 0;
 
   /* Child */
-  if (st_widget_get_direction (ST_WIDGET (actor)) == ST_TEXT_DIRECTION_RTL)
+  if (clutter_actor_get_text_direction (actor) == CLUTTER_TEXT_DIRECTION_RTL)
     {
       child_box.x1 = content_box.x1 + sb_width;
       child_box.x2 = content_box.x2;
@@ -679,8 +672,9 @@ st_scroll_view_style_changed (StWidget *widget)
   StScrollViewPrivate *priv = self->priv;
 
   StThemeNode *theme_node = st_widget_get_theme_node (widget);
-  gdouble fade_offset = st_theme_node_get_length (theme_node, "-st-vfade-offset");
-  st_scroll_view_update_vfade_effect (self, fade_offset);
+  gdouble vfade_offset = st_theme_node_get_length (theme_node, "-st-vfade-offset");
+  gdouble hfade_offset = st_theme_node_get_length (theme_node, "-st-hfade-offset");
+  st_scroll_view_update_fade_effect (self, vfade_offset, hfade_offset);
 
   st_widget_style_changed (ST_WIDGET (priv->hscroll));
   st_widget_style_changed (ST_WIDGET (priv->vscroll));
@@ -693,7 +687,7 @@ st_scroll_view_scroll_event (ClutterActor       *self,
                              ClutterScrollEvent *event)
 {
   StScrollViewPrivate *priv = ST_SCROLL_VIEW (self)->priv;
-  gdouble lower, value, upper, step;
+  gdouble lower, value, upper, step, hvalue, vvalue, delta_x, delta_y;
 
   /* don't handle scroll events if requested not to */
   if (!priv->mouse_scroll)
@@ -701,6 +695,16 @@ st_scroll_view_scroll_event (ClutterActor       *self,
 
   switch (event->direction)
     {
+    case CLUTTER_SCROLL_SMOOTH:
+      clutter_event_get_scroll_delta ((ClutterEvent *)event,
+                                      &delta_x, &delta_y);
+      g_object_get (priv->hadjustment,
+                    "value", &hvalue,
+                    NULL);
+      g_object_get (priv->vadjustment,
+                    "value", &vvalue,
+                    NULL);
+      break;
     case CLUTTER_SCROLL_UP:
     case CLUTTER_SCROLL_DOWN:
       g_object_get (priv->vadjustment,
@@ -723,6 +727,10 @@ st_scroll_view_scroll_event (ClutterActor       *self,
 
   switch (event->direction)
     {
+    case CLUTTER_SCROLL_SMOOTH:
+      st_adjustment_set_value (priv->hadjustment, hvalue + delta_x);
+      st_adjustment_set_value (priv->vadjustment, vvalue + delta_y);
+      break;
     case CLUTTER_SCROLL_UP:
       if (value == lower)
         return FALSE;
@@ -853,8 +861,8 @@ st_scroll_view_init (StScrollView *self)
                                 "vertical", TRUE,
                                 NULL);
 
-  clutter_actor_set_parent (priv->hscroll, CLUTTER_ACTOR (self));
-  clutter_actor_set_parent (priv->vscroll, CLUTTER_ACTOR (self));
+  clutter_actor_add_child (CLUTTER_ACTOR (self), priv->hscroll);
+  clutter_actor_add_child (CLUTTER_ACTOR (self), priv->vscroll);
 
   /* mouse scroll is enabled by default, so we also need to be reactive */
   priv->mouse_scroll = TRUE;
@@ -916,7 +924,7 @@ st_scroll_view_remove (ClutterContainer *container,
       else
         g_assert ("Unknown child removed from StScrollView");
 
-      clutter_actor_unparent (actor);
+      clutter_actor_remove_child (CLUTTER_ACTOR (container), actor);
     }
 }
 
@@ -963,7 +971,7 @@ st_scroll_view_new (void)
  *
  * Gets the horizontal scrollbar of the scrollbiew
  *
- * Return value: (transfer none): the horizontal #StScrollbar
+ * Return value: (transfer none): the horizontal #StScrollBar
  */
 ClutterActor *
 st_scroll_view_get_hscroll_bar (StScrollView *scroll)
@@ -979,7 +987,7 @@ st_scroll_view_get_hscroll_bar (StScrollView *scroll)
  *
  * Gets the vertical scrollbar of the scrollbiew
  *
- * Return value: (transfer none): the vertical #StScrollbar
+ * Return value: (transfer none): the vertical #StScrollBar
  */
 ClutterActor *
 st_scroll_view_get_vscroll_bar (StScrollView *scroll)

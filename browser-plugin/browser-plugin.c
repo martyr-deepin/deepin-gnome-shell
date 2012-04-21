@@ -41,7 +41,7 @@
       "It can be used only by extensions.gnome.org"
 #define PLUGIN_MIME_STRING "application/x-gnome-shell-integration::Gnome Shell Integration Dummy Content-Type";
 
-#define PLUGIN_API_VERSION 1
+#define PLUGIN_API_VERSION 3
 
 typedef struct {
   GDBusProxy *proxy;
@@ -104,7 +104,7 @@ check_origin_and_protocol (NPP instance)
                           &location))
     goto out;
 
-  if (!NPVARIANT_IS_OBJECT (document))
+  if (!NPVARIANT_IS_OBJECT (location))
     goto out;
 
   hostname = get_string_property (instance,
@@ -152,6 +152,8 @@ NP_Initialize(NPNetscapeFuncs *pfuncs, NPPluginFuncs *plugin)
 {
   /* global initialization routine, called once when plugin
      is loaded */
+
+  g_type_init ();
 
   g_debug ("plugin loaded");
 
@@ -262,11 +264,13 @@ NPP_Destroy(NPP           instance,
 /* =================== scripting interface =================== */
 
 typedef struct {
-	NPObject     parent;
-	NPP          instance;
-	GDBusProxy  *proxy;
-	NPObject    *listener;
-	gint         signal_id;
+  NPObject     parent;
+  NPP          instance;
+  GDBusProxy  *proxy;
+  NPObject    *listener;
+  NPObject    *restart_listener;
+  gint         signal_id;
+  guint        watch_name_id;
 } PluginObject;
 
 static void
@@ -284,7 +288,7 @@ on_shell_signal (GDBusProxy *proxy,
       gint32 status;
       gchar *error;
       NPVariant args[3];
-      NPVariant result;
+      NPVariant result = { NPVariantType_Void };
 
       g_variant_get (parameters, "(sis)", &uuid, &status, &error);
       STRINGZ_TO_NPVARIANT (uuid, args[0]);
@@ -300,6 +304,25 @@ on_shell_signal (GDBusProxy *proxy,
     }
 }
 
+static void
+on_shell_appeared (GDBusConnection *connection,
+                   const gchar     *name,
+                   const gchar     *name_owner,
+                   gpointer         user_data)
+{
+  PluginObject *obj = (PluginObject*) user_data;
+
+  if (obj->restart_listener)
+    {
+      NPVariant result = { NPVariantType_Void };
+
+      funcs.invokeDefault (obj->instance, obj->restart_listener,
+                           NULL, 0, &result);
+
+      funcs.releasevariantvalue (&result);
+    }
+}
+
 static NPObject *
 plugin_object_allocate (NPP      instance,
                         NPClass *klass)
@@ -311,6 +334,14 @@ plugin_object_allocate (NPP      instance,
   obj->proxy = g_object_ref (data->proxy);
   obj->signal_id = g_signal_connect (obj->proxy, "g-signal",
                                      G_CALLBACK (on_shell_signal), obj);
+
+  obj->watch_name_id = g_bus_watch_name (G_BUS_TYPE_SESSION,
+                                         "org.gnome.Shell",
+                                         G_BUS_NAME_WATCHER_FLAGS_NONE,
+                                         on_shell_appeared,
+                                         NULL,
+                                         obj,
+                                         NULL);
 
   g_debug ("plugin object created");
 
@@ -328,6 +359,9 @@ plugin_object_deallocate (NPObject *npobj)
   if (obj->listener)
     funcs.releaseobject (obj->listener);
 
+  if (obj->watch_name_id)
+    g_bus_unwatch_name (obj->watch_name_id);
+
   g_debug ("plugin object destroyed");
 
   g_slice_free (PluginObject, obj);
@@ -341,7 +375,9 @@ static NPIdentifier enable_extension_id;
 static NPIdentifier install_extension_id;
 static NPIdentifier uninstall_extension_id;
 static NPIdentifier onextension_changed_id;
+static NPIdentifier onrestart_id;
 static NPIdentifier get_errors_id;
+static NPIdentifier launch_extension_prefs_id;
 
 static bool
 plugin_object_has_method (NPObject     *npobj,
@@ -352,7 +388,8 @@ plugin_object_has_method (NPObject     *npobj,
           name == enable_extension_id ||
           name == install_extension_id ||
           name == uninstall_extension_id ||
-          name == get_errors_id);
+          name == get_errors_id ||
+          name == launch_extension_prefs_id);
 }
 
 static inline gboolean
@@ -457,7 +494,10 @@ plugin_enable_extension (PluginObject *obj,
 {
   gchar *uuid_str = g_strndup (uuid.UTF8Characters, uuid.UTF8Length);
   if (!uuid_is_valid (uuid_str))
-    return FALSE;
+    {
+      g_free (uuid_str);
+      return FALSE;
+    }
 
   g_dbus_proxy_call (obj->proxy,
                      (enabled ? "EnableExtension" : "DisableExtension"),
@@ -616,6 +656,33 @@ plugin_get_errors (PluginObject *obj,
   return jsonify_variant (res, result);
 }
 
+static gboolean
+plugin_launch_extension_prefs (PluginObject *obj,
+                               NPString      uuid,
+                               NPVariant    *result)
+{
+  gchar *uuid_str;
+
+  uuid_str = g_strndup (uuid.UTF8Characters, uuid.UTF8Length);
+  if (!uuid_is_valid (uuid_str))
+    {
+      g_free (uuid_str);
+      return FALSE;
+    }
+
+  g_dbus_proxy_call (obj->proxy,
+                     "LaunchExtensionPrefs",
+                     g_variant_new ("(s)", uuid_str),
+                     G_DBUS_CALL_FLAGS_NONE,
+                     -1, /* timeout */
+                     NULL, /* cancellable */
+                     NULL, /* callback */
+                     NULL /* user_data */);
+
+  g_free (uuid_str);
+  return TRUE;
+}
+
 static int
 plugin_get_api_version (PluginObject  *obj,
                         NPVariant     *result)
@@ -726,6 +793,14 @@ plugin_object_invoke (NPObject        *npobj,
                                 NPVARIANT_TO_STRING(args[0]),
                                 result);
     }
+  else if (name == launch_extension_prefs_id)
+    {
+      if (!NPVARIANT_IS_STRING(args[0])) return FALSE;
+
+      return plugin_launch_extension_prefs (obj,
+                                            NPVARIANT_TO_STRING(args[0]),
+                                            result);
+    }
 
   return TRUE;
 }
@@ -735,6 +810,7 @@ plugin_object_has_property (NPObject     *npobj,
                             NPIdentifier  name)
 {
   return (name == onextension_changed_id ||
+          name == onrestart_id ||
           name == api_version_id ||
           name == shell_version_id);
 }
@@ -761,6 +837,33 @@ plugin_object_get_property (NPObject     *npobj,
       else
         NULL_TO_NPVARIANT (*result);
     }
+  else if (name == onrestart_id)
+    {
+      if (obj->restart_listener)
+        OBJECT_TO_NPVARIANT (obj->restart_listener, *result);
+      else
+        NULL_TO_NPVARIANT (*result);
+    }
+
+  return TRUE;
+}
+
+static bool
+plugin_object_set_callback (NPObject        **listener,
+                            const NPVariant  *value)
+{
+  if (!NPVARIANT_IS_OBJECT (*value) && !NPVARIANT_IS_NULL (*value))
+    return FALSE;
+
+  if (*listener)
+    funcs.releaseobject (*listener);
+  *listener = NULL;
+
+  if (NPVARIANT_IS_OBJECT (*value))
+    {
+      *listener = NPVARIANT_TO_OBJECT (*value);
+      funcs.retainobject (*listener);
+    }
 
   return TRUE;
 }
@@ -772,25 +875,13 @@ plugin_object_set_property (NPObject        *npobj,
 {
   PluginObject *obj;
 
-  if (!plugin_object_has_property (npobj, name))
-    return FALSE;
+  obj = (PluginObject *)npobj;
 
   if (name == onextension_changed_id)
-    {
-      obj = (PluginObject*) npobj;
-      if (obj->listener)
-        funcs.releaseobject (obj->listener);
+    return plugin_object_set_callback (&obj->listener, value);
 
-      obj->listener = NULL;
-      if (NPVARIANT_IS_OBJECT (*value))
-        {
-          obj->listener = NPVARIANT_TO_OBJECT (*value);
-          funcs.retainobject (obj->listener);
-          return TRUE;
-        }
-      else if (NPVARIANT_IS_NULL (*value))
-        return TRUE;
-    }
+  if (name == onrestart_id)
+    return plugin_object_set_callback (&obj->restart_listener, value);
 
   return FALSE;
 }
@@ -824,7 +915,9 @@ init_methods_and_properties (void)
   install_extension_id = funcs.getstringidentifier ("installExtension");
   uninstall_extension_id = funcs.getstringidentifier ("uninstallExtension");
   get_errors_id = funcs.getstringidentifier ("getExtensionErrors");
+  launch_extension_prefs_id = funcs.getstringidentifier ("launchExtensionPrefs");
 
+  onrestart_id = funcs.getstringidentifier ("onshellrestart");
   onextension_changed_id = funcs.getstringidentifier ("onchange");
 }
 

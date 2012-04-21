@@ -14,15 +14,16 @@ const AppDisplay = imports.ui.appDisplay;
 const ContactDisplay = imports.ui.contactDisplay;
 const Dash = imports.ui.dash;
 const DND = imports.ui.dnd;
-const DocDisplay = imports.ui.docDisplay;
 const Lightbox = imports.ui.lightbox;
 const Main = imports.ui.main;
 const MessageTray = imports.ui.messageTray;
 const Panel = imports.ui.panel;
 const Params = imports.misc.params;
 const PlaceDisplay = imports.ui.placeDisplay;
+const RemoteSearch = imports.ui.remoteSearch;
 const Tweener = imports.ui.tweener;
 const ViewSelector = imports.ui.viewSelector;
+const Wanda = imports.ui.wanda;
 const WorkspacesView = imports.ui.workspacesView;
 const WorkspaceThumbnail = imports.ui.workspaceThumbnail;
 
@@ -46,11 +47,9 @@ const SwipeScrollResult = {
     CLICK: 2
 };
 
-function ShellInfo() {
-    this._init();
-}
+const ShellInfo = new Lang.Class({
+    Name: 'ShellInfo',
 
-ShellInfo.prototype = {
     _init: function() {
         this._source = null;
         this._undoCallback = null;
@@ -95,13 +94,11 @@ ShellInfo.prototype = {
 
         this._source.notify(notification);
     }
-};
+});
 
-function Overview() {
-    this._init.apply(this, arguments);
-}
+const Overview = new Lang.Class({
+    Name: 'Overview',
 
-Overview.prototype = {
     _init : function(params) {
         params = Params.parse(params, { isDummy: false });
 
@@ -112,7 +109,6 @@ Overview.prototype = {
         if (this.isDummy) {
             this.animationInProgress = false;
             this.visible = false;
-            this.workspaces = null;
             return;
         }
 
@@ -130,8 +126,11 @@ Overview.prototype = {
 
         this._spacing = 0;
 
-        this._group = new St.Group({ name: 'overview',
-                                     reactive: true });
+        /* Translators: This is the main view to select
+           activities. See also note for "Activities" string. */
+        this._group = new St.Widget({ name: 'overview',
+                                      accessible_name: _("Overview"),
+                                      reactive: true });
         this._group._delegate = this;
         this._group.connect('style-changed',
             Lang.bind(this, function() {
@@ -184,8 +183,6 @@ Overview.prototype = {
         this._lastActiveWorkspaceIndex = -1;
         this._lastHoveredWindow = null;
         this._needsFakePointerEvent = false;
-
-        this.workspaces = null;
     },
 
     // The members we construct that are implemented in JS might
@@ -204,15 +201,19 @@ Overview.prototype = {
         this._workspacesDisplay = new WorkspacesView.WorkspacesDisplay();
         this._viewSelector.addViewTab('windows', _("Windows"), this._workspacesDisplay.actor, 'text-x-generic');
 
-		this._allAppDisplay = new AppDisplay.AllAppDisplay();
-        this._viewSelector.addViewTab('applications', _("Applications"), this._allAppDisplay.actor, 'system-run');
+        let appView = new AppDisplay.AllAppDisplay();
+        this._viewSelector.addViewTab('applications', _("Applications"), appView.actor, 'system-run');
 
         // Default search providers
+        // Wanda comes obviously first
+        this.addSearchProvider(new Wanda.WandaSearchProvider());
         this.addSearchProvider(new AppDisplay.AppSearchProvider());
         this.addSearchProvider(new AppDisplay.SettingsSearchProvider());
         this.addSearchProvider(new PlaceDisplay.PlaceSearchProvider());
-        this.addSearchProvider(new DocDisplay.DocSearchProvider());
         this.addSearchProvider(new ContactDisplay.ContactSearchProvider());
+
+        // Load remote search providers provided by applications
+        RemoteSearch.loadRemoteSearchProviders(Lang.bind(this, this.addSearchProvider));
 
         // TODO - recalculate everything when desktop size changes
         this._dash = new Dash.Dash();
@@ -359,7 +360,7 @@ Overview.prototype = {
                 let direction;
                 if (this._scrollDirection == SwipeScrollDirection.HORIZONTAL) {
                     direction = stageX > this._dragStartX ? -1 : 1;
-                    if (!(St.Widget.get_default_direction() == St.TextDirection.RTL))
+                    if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
                         direction *= -1;
                 } else {
                     direction = stageY > this._dragStartY ? -1 : 1;
@@ -451,7 +452,7 @@ Overview.prototype = {
                     return true;
 
                 if (this._scrollDirection == SwipeScrollDirection.HORIZONTAL) {
-                    if (!(St.Widget.get_default_direction() == St.TextDirection.RTL))
+                    if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
                         this._scrollAdjustment.value -= (dx / primary.width) * this._scrollAdjustment.page_size;
                     else
                         this._scrollAdjustment.value += (dx / primary.width) * this._scrollAdjustment.page_size;
@@ -492,7 +493,7 @@ Overview.prototype = {
         this.hide();
 
         let primary = Main.layoutManager.primaryMonitor;
-        let rtl = !(St.Widget.get_default_direction () == St.TextDirection.RTL);
+        let rtl = (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL);
 
         let contentY = Main.panel.actor.height;
         let contentHeight = primary.height - contentY - Main.messageTray.actor.height;
@@ -507,7 +508,7 @@ Overview.prototype = {
         let viewWidth = primary.width - dashWidth - this._spacing;
         let viewHeight = contentHeight - 2 * this._spacing;
         let viewY = contentY + this._spacing;
-        let viewX = (!rtl) ? 0 : dashWidth + this._spacing;
+        let viewX = rtl ? 0 : dashWidth + this._spacing;
 
         // Set the dash's x position - y is handled by a constraint
         let dashX;
@@ -591,13 +592,10 @@ Overview.prototype = {
 
         this._workspacesDisplay.show();
 
-        this.workspaces = this._workspacesDisplay.workspacesView;
-        global.overlay_group.add_actor(this.workspaces.actor);
-
         if (!this._desktopFade.child)
             this._desktopFade.child = this._getDesktopClone();
 
-        if (!this.workspaces.getActiveWorkspace().hasMaximizedWindows()) {
+        if (!this._workspacesDisplay.activeWorkspaceHasMaximizedWindows()) {
             this._desktopFade.opacity = 255;
             this._desktopFade.show();
             Tweener.addTween(this._desktopFade,
@@ -732,7 +730,7 @@ Overview.prototype = {
         this.animationInProgress = true;
         this._hideInProgress = true;
 
-        if (!this.workspaces.getActiveWorkspace().hasMaximizedWindows()) {
+        if (!this._workspacesDisplay.activeWorkspaceHasMaximizedWindows()) {
             this._desktopFade.opacity = 0;
             this._desktopFade.show();
             Tweener.addTween(this._desktopFade,
@@ -741,7 +739,7 @@ Overview.prototype = {
                                transition: 'easeOutQuad' });
         }
 
-        this.workspaces.hide();
+        this._workspacesDisplay.zoomFromOverview();
 
         // Make other elements fade out.
         Tweener.addTween(this._group,
@@ -783,9 +781,6 @@ Overview.prototype = {
 
         global.window_group.show();
 
-        this.workspaces.destroy();
-        this.workspaces = null;
-
         this._workspacesDisplay.hide();
 
         this._desktopFade.hide();
@@ -811,5 +806,5 @@ Overview.prototype = {
             this._needsFakePointerEvent = false;
         }
     }
-};
+});
 Signals.addSignalMethods(Overview.prototype);

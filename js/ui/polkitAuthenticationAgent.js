@@ -36,15 +36,12 @@ const PolkitAgent = imports.gi.PolkitAgent;
 const ModalDialog = imports.ui.modalDialog;
 const ShellEntry = imports.ui.shellEntry;
 
-function AuthenticationDialog(actionId, message, cookie, userNames) {
-    this._init(actionId, message, cookie, userNames);
-}
-
-AuthenticationDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
+const AuthenticationDialog = new Lang.Class({
+    Name: 'AuthenticationDialog',
+    Extends: ModalDialog.ModalDialog,
 
     _init: function(actionId, message, cookie, userNames) {
-        ModalDialog.ModalDialog.prototype._init.call(this, { styleClass: 'polkit-dialog' });
+        this.parent({ styleClass: 'prompt-dialog' });
 
         this.actionId = actionId;
         this.message = message;
@@ -52,7 +49,7 @@ AuthenticationDialog.prototype = {
         this._wasDismissed = false;
         this._completed = false;
 
-        let mainContentBox = new St.BoxLayout({ style_class: 'polkit-dialog-main-layout',
+        let mainContentBox = new St.BoxLayout({ style_class: 'prompt-dialog-main-layout',
                                                 vertical: false });
         this.contentLayout.add(mainContentBox,
                                { x_fill: true,
@@ -65,19 +62,19 @@ AuthenticationDialog.prototype = {
                              x_align: St.Align.END,
                              y_align: St.Align.START });
 
-        let messageBox = new St.BoxLayout({ style_class: 'polkit-dialog-message-layout',
+        let messageBox = new St.BoxLayout({ style_class: 'prompt-dialog-message-layout',
                                             vertical: true });
         mainContentBox.add(messageBox,
                            { y_align: St.Align.START });
 
-        this._subjectLabel = new St.Label({ style_class: 'polkit-dialog-headline',
+        this._subjectLabel = new St.Label({ style_class: 'prompt-dialog-headline',
                                             text: _("Authentication Required") });
 
         messageBox.add(this._subjectLabel,
                        { y_fill:  false,
                          y_align: St.Align.START });
 
-        this._descriptionLabel = new St.Label({ style_class: 'polkit-dialog-description',
+        this._descriptionLabel = new St.Label({ style_class: 'prompt-dialog-description',
                                                 text: message });
         this._descriptionLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         this._descriptionLabel.clutter_text.line_wrap = true;
@@ -140,9 +137,9 @@ AuthenticationDialog.prototype = {
 
         this._passwordBox = new St.BoxLayout({ vertical: false });
         messageBox.add(this._passwordBox);
-        this._passwordLabel = new St.Label(({ style_class: 'polkit-dialog-password-label' }));
+        this._passwordLabel = new St.Label(({ style_class: 'prompt-dialog-password-label' }));
         this._passwordBox.add(this._passwordLabel);
-        this._passwordEntry = new St.Entry({ style_class: 'polkit-dialog-password-entry',
+        this._passwordEntry = new St.Entry({ style_class: 'prompt-dialog-password-entry',
                                              text: "",
                                              can_focus: true});
         ShellEntry.addContextMenu(this._passwordEntry, { isPassword: true });
@@ -152,13 +149,13 @@ AuthenticationDialog.prototype = {
         this.setInitialKeyFocus(this._passwordEntry);
         this._passwordBox.hide();
 
-        this._errorMessageLabel = new St.Label({ style_class: 'polkit-dialog-error-label' });
+        this._errorMessageLabel = new St.Label({ style_class: 'prompt-dialog-error-label' });
         this._errorMessageLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         this._errorMessageLabel.clutter_text.line_wrap = true;
         messageBox.add(this._errorMessageLabel);
         this._errorMessageLabel.hide();
 
-        this._infoMessageLabel = new St.Label({ style_class: 'polkit-dialog-info-label' });
+        this._infoMessageLabel = new St.Label({ style_class: 'prompt-dialog-info-label' });
         this._infoMessageLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         this._infoMessageLabel.clutter_text.line_wrap = true;
         messageBox.add(this._infoMessageLabel);
@@ -168,7 +165,7 @@ AuthenticationDialog.prototype = {
          * infoMessage and errorMessageLabel - but it is still invisible because
          * gnome-shell.css sets the color to be transparent
          */
-        this._nullMessageLabel = new St.Label({ style_class: 'polkit-dialog-null-label',
+        this._nullMessageLabel = new St.Label({ style_class: 'prompt-dialog-null-label',
                                                 text: 'abc'});
         this._nullMessageLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         this._nullMessageLabel.clutter_text.line_wrap = true;
@@ -335,15 +332,12 @@ AuthenticationDialog.prototype = {
         this.close(global.get_current_time());
         this._emitDone(false, true);
     },
-
-};
+});
 Signals.addSignalMethods(AuthenticationDialog.prototype);
 
-function AuthenticationAgent() {
-    this._init();
-}
+const AuthenticationAgent = new Lang.Class({
+    Name: 'AuthenticationAgent',
 
-AuthenticationAgent.prototype = {
     _init: function() {
         this._native = new Shell.PolkitAuthenticationAgent();
         this._native.connect('initiate', Lang.bind(this, this._onInitiate));
@@ -399,12 +393,13 @@ AuthenticationAgent.prototype = {
                                  Lang.bind(this,
                                            function() {
                                                this._reallyCompleteRequest(wasDismissed);
+                                               return false;
                                            }));
         } else {
             this._reallyCompleteRequest(wasDismissed);
         }
     }
-}
+});
 
 function init() {
     let agent = new AuthenticationAgent();

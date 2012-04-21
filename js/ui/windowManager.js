@@ -13,6 +13,7 @@ const WorkspaceSwitcherPopup = imports.ui.workspaceSwitcherPopup;
 const Main = imports.ui.main;
 const Tweener = imports.ui.tweener;
 
+const SHELL_KEYBINDINGS_SCHEMA = 'org.gnome.shell.keybindings';
 const WINDOW_ANIMATION_TIME = 0.25;
 const DIM_TIME = 0.500;
 const UNDIM_TIME = 0.250;
@@ -31,11 +32,9 @@ function getTopInvisibleBorder(metaWindow) {
     return outerRect.y - inputRect.y;
 }
 
-function WindowDimmer(actor) {
-    this._init(actor);
-}
+const WindowDimmer = new Lang.Class({
+    Name: 'WindowDimmer',
 
-WindowDimmer.prototype = {
     _init: function(actor) {
         if (Clutter.feature_available(Clutter.FeatureFlags.SHADERS_GLSL)) {
             this._effect = new Clutter.ShaderEffect({ shader_type: Clutter.ShaderType.FRAGMENT_SHADER });
@@ -75,7 +74,7 @@ WindowDimmer.prototype = {
     },
 
     _dimFraction: 0.0
-};
+});
 
 function getWindowDimmer(actor) {
     if (!actor._windowDimmer)
@@ -84,15 +83,12 @@ function getWindowDimmer(actor) {
     return actor._windowDimmer;
 }
 
-function WindowManager() {
-    this._init();
-}
+const WindowManager = new Lang.Class({
+    Name: 'WindowManager',
 
-WindowManager.prototype = {
     _init : function() {
         this._shellwm =  global.window_manager;
 
-        this._keyBindingHandlers = [];
         this._minimizing = [];
         this._maximizing = [];
         this._unmaximizing = [];
@@ -121,15 +117,28 @@ WindowManager.prototype = {
         this._shellwm.connect('destroy', Lang.bind(this, this._destroyWindow));
 
         this._workspaceSwitcherPopup = null;
-        this.setKeybindingHandler('switch_to_workspace_left', Lang.bind(this, this._showWorkspaceSwitcher));
-        this.setKeybindingHandler('switch_to_workspace_right', Lang.bind(this, this._showWorkspaceSwitcher));
-        this.setKeybindingHandler('switch_to_workspace_up', Lang.bind(this, this._showWorkspaceSwitcher));
-        this.setKeybindingHandler('switch_to_workspace_down', Lang.bind(this, this._showWorkspaceSwitcher));
-        this.setKeybindingHandler('switch_windows', Lang.bind(this, this._startAppSwitcher));
-        this.setKeybindingHandler('switch_group', Lang.bind(this, this._startAppSwitcher));
-        this.setKeybindingHandler('switch_windows_backward', Lang.bind(this, this._startAppSwitcher));
-        this.setKeybindingHandler('switch_group_backward', Lang.bind(this, this._startAppSwitcher));
-        this.setKeybindingHandler('switch_panels', Lang.bind(this, this._startA11ySwitcher));
+        Meta.keybindings_set_custom_handler('switch-to-workspace-left',
+                                            Lang.bind(this, this._showWorkspaceSwitcher));
+        Meta.keybindings_set_custom_handler('switch-to-workspace-right',
+                                            Lang.bind(this, this._showWorkspaceSwitcher));
+        Meta.keybindings_set_custom_handler('switch-to-workspace-up',
+                                            Lang.bind(this, this._showWorkspaceSwitcher));
+        Meta.keybindings_set_custom_handler('switch-to-workspace-down',
+                                            Lang.bind(this, this._showWorkspaceSwitcher));
+        Meta.keybindings_set_custom_handler('switch-windows',
+                                            Lang.bind(this, this._startAppSwitcher));
+        Meta.keybindings_set_custom_handler('switch-group',
+                                            Lang.bind(this, this._startAppSwitcher));
+        Meta.keybindings_set_custom_handler('switch-windows-backward',
+                                            Lang.bind(this, this._startAppSwitcher));
+        Meta.keybindings_set_custom_handler('switch-group-backward',
+                                            Lang.bind(this, this._startAppSwitcher));
+        Meta.keybindings_set_custom_handler('switch-panels',
+                                            Lang.bind(this, this._startA11ySwitcher));
+        global.display.add_keybinding('open-application-menu',
+                                      new Gio.Settings({ schema: SHELL_KEYBINDINGS_SCHEMA }),
+                                      Meta.KeyBindingFlags.NONE,
+                                      Lang.bind(this, this._openAppMenu));
 
         Main.overview.connect('showing', Lang.bind(this, function() {
             for (let i = 0; i < this._dimmedWindows.length; i++)
@@ -141,16 +150,6 @@ WindowManager.prototype = {
         }));
     },
 
-    setKeybindingHandler: function(keybinding, handler){
-        if (this._keyBindingHandlers[keybinding])
-            this._shellwm.disconnect(this._keyBindingHandlers[keybinding]);
-        else
-            this._shellwm.takeover_keybinding(keybinding);
-
-        this._keyBindingHandlers[keybinding] =
-            this._shellwm.connect('keybinding::' + keybinding, handler);
-    },
-
     blockAnimations: function() {
         this._animationBlockCount++;
     },
@@ -160,7 +159,7 @@ WindowManager.prototype = {
     },
 
     _shouldAnimate : function(actor) {
-        if (Main.overview.visible || this._animationsBlocked > 0)
+        if (Main.overview.visible || this._animationBlockCount > 0)
             return false;
         if (actor && (actor.meta_window.get_window_type() != Meta.WindowType.NORMAL))
             return false;
@@ -192,7 +191,7 @@ WindowManager.prototype = {
 
         let primary = Main.layoutManager.primaryMonitor;
         let xDest = primary.x;
-        if (St.Widget.get_default_direction() == St.TextDirection.RTL)
+        if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
             xDest += primary.width;
 
         Tweener.addTween(actor,
@@ -534,42 +533,50 @@ WindowManager.prototype = {
         shellwm.completed_switch_workspace();
     },
 
-    _startAppSwitcher : function(shellwm, binding, mask, window, backwards) {
+    _startAppSwitcher : function(display, screen, window, binding) {
         /* prevent a corner case where both popups show up at once */
         if (this._workspaceSwitcherPopup != null)
             this._workspaceSwitcherPopup.actor.hide();
 
         let tabPopup = new AltTab.AltTabPopup();
 
-        if (!tabPopup.show(backwards, binding, mask))
+        let modifiers = binding.get_modifiers();
+        let backwards = modifiers & Meta.VirtualModifier.SHIFT_MASK;
+        if (!tabPopup.show(backwards, binding.get_name(), binding.get_mask()))
             tabPopup.destroy();
     },
 
-    _startA11ySwitcher : function(shellwm, binding, mask, window, backwards) {
-        Main.ctrlAltTabManager.popup(backwards, mask);
+    _startA11ySwitcher : function(display, screen, window, binding) {
+        let modifiers = binding.get_modifiers();
+        let backwards = modifiers & Meta.VirtualModifier.SHIFT_MASK;
+        Main.ctrlAltTabManager.popup(backwards, binding.get_mask());
     },
 
-    _showWorkspaceSwitcher : function(shellwm, binding, mask, window, backwards) {
-        if (global.screen.n_workspaces == 1)
+    _openAppMenu : function(display, screen, window, event, binding) {
+        Main.panel.openAppMenu();
+    },
+
+    _showWorkspaceSwitcher : function(display, screen, window, binding) {
+        if (screen.n_workspaces == 1)
             return;
 
         if (this._workspaceSwitcherPopup == null)
             this._workspaceSwitcherPopup = new WorkspaceSwitcherPopup.WorkspaceSwitcherPopup();
 
-        if (binding == 'switch_to_workspace_up')
+        if (binding.get_name() == 'switch-to-workspace-up')
             this.actionMoveWorkspaceUp();
-        else if (binding == 'switch_to_workspace_down')
+        else if (binding.get_name() == 'switch-to-workspace-down')
             this.actionMoveWorkspaceDown();
         // left/right would effectively act as synonyms for up/down if we enabled them;
         // but that could be considered confusing.
-        // else if (binding == 'switch_to_workspace_left')
+        // else if (binding.get_name() == 'switch-to-workspace-left')
         //   this.actionMoveWorkspaceLeft();
-        // else if (binding == 'switch_to_workspace_right')
+        // else if (binding.get_name() == 'switch-to-workspace-right')
         //   this.actionMoveWorkspaceRight();
     },
 
     actionMoveWorkspaceLeft: function() {
-        let rtl = (St.Widget.get_default_direction() == St.TextDirection.RTL);
+        let rtl = (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL);
         let activeWorkspaceIndex = global.screen.get_active_workspace_index();
         let indexToActivate = activeWorkspaceIndex;
         if (rtl && activeWorkspaceIndex < global.screen.n_workspaces - 1)
@@ -585,7 +592,7 @@ WindowManager.prototype = {
     },
 
     actionMoveWorkspaceRight: function() {
-        let rtl = (St.Widget.get_default_direction() == St.TextDirection.RTL);
+        let rtl = (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL);
         let activeWorkspaceIndex = global.screen.get_active_workspace_index();
         let indexToActivate = activeWorkspaceIndex;
         if (rtl && activeWorkspaceIndex > 0)
@@ -625,4 +632,4 @@ WindowManager.prototype = {
         if (!Main.overview.visible)
             this._workspaceSwitcherPopup.display(WorkspaceSwitcherPopup.DOWN, indexToActivate);
     }
-};
+});

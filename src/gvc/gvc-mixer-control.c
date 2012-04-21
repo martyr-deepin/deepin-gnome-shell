@@ -113,7 +113,6 @@ gvc_mixer_control_get_pa_context (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_event_sink_input:
- *
  * @control:
  *
  * Returns: (transfer none):
@@ -231,7 +230,6 @@ gvc_mixer_control_set_default_source (GvcMixerControl *control,
 
 /**
  * gvc_mixer_control_get_default_sink:
- *
  * @control:
  *
  * Returns: (transfer none):
@@ -255,7 +253,6 @@ gvc_mixer_control_get_default_sink (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_default_source:
- *
  * @control:
  *
  * Returns: (transfer none):
@@ -287,7 +284,6 @@ gvc_mixer_control_lookup_id (GHashTable *hash_table,
 
 /**
  * gvc_mixer_control_lookup_stream_id:
- *
  * @control:
  * @id:
  *
@@ -304,7 +300,6 @@ gvc_mixer_control_lookup_stream_id (GvcMixerControl *control,
 
 /**
  * gvc_mixer_control_lookup_card_id:
- *
  * @control:
  * @id:
  *
@@ -361,7 +356,6 @@ gvc_card_collate (GvcMixerCard *a,
 
 /**
  * gvc_mixer_control_get_cards:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerCard):
@@ -398,7 +392,6 @@ gvc_stream_collate (GvcMixerStream *a,
 
 /**
  * gvc_mixer_control_get_streams:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerStream):
@@ -419,7 +412,6 @@ gvc_mixer_control_get_streams (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_sinks:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerSink):
@@ -440,7 +432,6 @@ gvc_mixer_control_get_sinks (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_sources:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerSource):
@@ -461,7 +452,6 @@ gvc_mixer_control_get_sources (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_sink_inputs:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerSinkInput):
@@ -482,7 +472,6 @@ gvc_mixer_control_get_sink_inputs (GvcMixerControl *control)
 
 /**
  * gvc_mixer_control_get_source_outputs:
- *
  * @control:
  *
  * Returns: (transfer container) (element-type Gvc.MixerSourceOutput):
@@ -2137,56 +2126,49 @@ gvc_mixer_control_class_init (GvcMixerControlClass *klass)
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, state_changed),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [STREAM_ADDED] =
                 g_signal_new ("stream-added",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, stream_added),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [STREAM_REMOVED] =
                 g_signal_new ("stream-removed",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, stream_removed),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [CARD_ADDED] =
                 g_signal_new ("card-added",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, card_added),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [CARD_REMOVED] =
                 g_signal_new ("card-removed",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, card_removed),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [DEFAULT_SINK_CHANGED] =
                 g_signal_new ("default-sink-changed",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, default_sink_changed),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
         signals [DEFAULT_SOURCE_CHANGED] =
                 g_signal_new ("default-source-changed",
                               G_TYPE_FROM_CLASS (klass),
                               G_SIGNAL_RUN_LAST,
                               G_STRUCT_OFFSET (GvcMixerControlClass, default_source_changed),
-                              NULL, NULL,
-                              g_cclosure_marshal_VOID__UINT,
+                              NULL, NULL, NULL,
                               G_TYPE_NONE, 1, G_TYPE_UINT);
 
         g_type_class_add_private (klass, sizeof (GvcMixerControlPrivate));

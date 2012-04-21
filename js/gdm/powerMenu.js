@@ -22,20 +22,23 @@ const Lang = imports.lang;
 const UPowerGlib = imports.gi.UPowerGlib;
 
 const ConsoleKit = imports.gdm.consoleKit;
+const Systemd = imports.gdm.systemd;
+
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
 
-function PowerMenuButton() {
-    this._init();
-}
-
-PowerMenuButton.prototype = {
-    __proto__: PanelMenu.SystemStatusButton.prototype,
+const PowerMenuButton = new Lang.Class({
+    Name: 'PowerMenuButton',
+    Extends: PanelMenu.SystemStatusButton,
 
     _init: function() {
-        PanelMenu.SystemStatusButton.prototype._init.call(this, 'system-shutdown', null);
-        this._consoleKitManager = new ConsoleKit.ConsoleKitManager();
+        this.parent('system-shutdown', null);
         this._upClient = new UPowerGlib.Client();
+
+        if (Systemd.haveSystemd())
+            this._systemdLoginManager = new Systemd.SystemdLoginManager();
+        else
+            this._consoleKitManager = new ConsoleKit.ConsoleKitManager();
 
         this._createSubMenu();
 
@@ -64,39 +67,75 @@ PowerMenuButton.prototype = {
     },
 
     _updateHaveShutdown: function() {
-        this._consoleKitManager.CanStopRemote(Lang.bind(this,
-            function(result, error) {
-                if (!error)
-                    this._haveShutdown = result;
-                else
-                    this._haveShutdown = false;
 
-                if (this._haveShutdown) {
-                    this._powerOffItem.actor.show();
-                } else {
-                    this._powerOffItem.actor.hide();
-                }
+        if (Systemd.haveSystemd()) {
+            this._systemdLoginManager.CanPowerOffRemote(Lang.bind(this,
+                function(result, error) {
+                    if (!error)
+                        this._haveShutdown = result != 'no';
+                    else
+                        this._haveShutdown = false;
 
-                this._updateVisibility();
-            }));
+                    if (this._haveShutdown)
+                        this._powerOffItem.actor.show();
+                    else
+                        this._powerOffItem.actor.hide();
+
+                    this._updateVisibility();
+                }));
+        } else {
+            this._consoleKitManager.CanStopRemote(Lang.bind(this,
+                function(result, error) {
+                    if (!error)
+                        this._haveShutdown = result;
+                    else
+                        this._haveShutdown = false;
+
+                    if (this._haveShutdown) {
+                        this._powerOffItem.actor.show();
+                    } else {
+                        this._powerOffItem.actor.hide();
+                    }
+
+                    this._updateVisibility();
+                }));
+        }
     },
 
     _updateHaveRestart: function() {
-        this._consoleKitManager.CanRestartRemote(Lang.bind(this,
-            function(result, error) {
-                if (!error)
-                    this._haveRestart = result;
-                else
-                    this._haveRestart = false;
 
-                if (this._haveRestart) {
-                    this._restartItem.actor.show();
-                } else {
-                    this._restartItem.actor.hide();
-                }
+        if (Systemd.haveSystemd()) {
+            this._systemdLoginManager.CanRebootRemote(Lang.bind(this,
+                function(result, error) {
+                    if (!error)
+                        this._haveRestart = result != 'no';
+                    else
+                        this._haveRestart = false;
 
-                this._updateVisibility();
-            }));
+                    if (this._haveRestart)
+                        this._restartItem.actor.show();
+                    else
+                        this._restartItem.actor.hide();
+
+                    this._updateVisibility();
+                }));
+        } else {
+            this._consoleKitManager.CanRestartRemote(Lang.bind(this,
+                function(result, error) {
+                    if (!error)
+                        this._haveRestart = result;
+                    else
+                        this._haveRestart = false;
+
+                    if (this._haveRestart) {
+                        this._restartItem.actor.show();
+                    } else {
+                        this._restartItem.actor.hide();
+                    }
+
+                    this._updateVisibility();
+                }));
+        }
     },
 
     _updateHaveSuspend: function() {
@@ -135,12 +174,22 @@ PowerMenuButton.prototype = {
     },
 
     _onActivateRestart: function() {
-        if (this._haveRestart)
+        if (!this._haveRestart)
+            return;
+
+        if (Systemd.haveSystemd())
+            this._systemdLoginManager.RebootRemote(true);
+        else
             this._consoleKitManager.RestartRemote();
     },
 
     _onActivatePowerOff: function() {
-        if (this._haveShutdown)
+        if (!this._haveShutdown)
+            return;
+
+        if (Systemd.haveSystemd())
+            this._systemdLoginManager.PowerOffRemote(true);
+        else
             this._consoleKitManager.StopRemote();
     }
-};
+});

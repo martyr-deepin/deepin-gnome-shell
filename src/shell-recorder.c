@@ -74,6 +74,7 @@ struct _ShellRecorder {
   GSList *pipelines; /* all pipelines */
 
   GstClockTime start_time; /* When we started recording (adjusted for pauses) */
+  GstClockTime last_frame_time; /* Timestamp for the last frame */
   GstClockTime pause_time; /* When the pipeline was paused */
 
   /* GSource IDs for different timeouts and idles */
@@ -114,14 +115,12 @@ enum {
 
 G_DEFINE_TYPE(ShellRecorder, shell_recorder, G_TYPE_OBJECT);
 
-/* The number of frames per second we configure for the GStreamer pipeline.
- * (the number of frames we actually write into the GStreamer pipeline is
- * based entirely on how fast clutter is drawing.) Using 60fps seems high
- * but the observed smoothness is a lot better than for 30fps when encoding
- * as theora for a minimal size increase. This may be an artifact of the
- * encoding process.
+/* The default value of the target frame rate; we'll never record more
+ * than this many frames per second, though we may record less if the
+ * screen isn't being redrawn. 30 is a compromise between smoothness
+ * and the size of the recording.
  */
-#define DEFAULT_FRAMES_PER_SECOND 15
+#define DEFAULT_FRAMES_PER_SECOND 30
 
 /* The time (in milliseconds) between querying the server for the cursor
  * position.
@@ -145,11 +144,11 @@ G_DEFINE_TYPE(ShellRecorder, shell_recorder, G_TYPE_OBJECT);
  * (Theora does have some support for frames at non-uniform times, but
  * things seem to break down if there are large gaps.)
  */
-#define DEFAULT_PIPELINE "videorate ! vp8enc quality=10 speed=2 threads=%T ! queue ! webmmux"
+#define DEFAULT_PIPELINE "vp8enc quality=8 speed=6 threads=%T ! queue ! webmmux"
 
-/* The default filename pattern. Example shell-20090311b-2.webm
+/* The default filename pattern. Example Screencast at 2009-03-11 00:08:15.webm
  */
-#define DEFAULT_FILENAME "shell-%d%u-%c.webm"
+#define DEFAULT_FILENAME "Screencast at %d %t.webm"
 
 /* If we can find the amount of memory on the machine, we use half
  * of that for memory_target, otherwise, we use this value, in kB.
@@ -341,7 +340,7 @@ recorder_update_memory_used (ShellRecorder *recorder,
            * seems like a bad idea.
            */
           recorder->only_paint = TRUE;
-          clutter_redraw (recorder->stage);
+          clutter_stage_ensure_redraw (recorder->stage);
           recorder->only_paint = FALSE;
         }
     }
@@ -518,21 +517,40 @@ recorder_record_frame (ShellRecorder *recorder)
   GstBuffer *buffer;
   guint8 *data;
   guint size;
+  GstClockTime now;
+
+  /* If we get into the red zone, stop buffering new frames; 13/16 is
+  * a bit more than the 3/4 threshold for a red indicator to keep the
+  * indicator from flashing between red and yellow. */
+  if (recorder->memory_used > (recorder->memory_target * 13) / 16)
+    return;
+
+  /* Drop frames to get down to something like the target frame rate; since frames
+   * are generated with VBlank sync, we don't have full control anyways, so we just
+   * drop frames if the interval since the last frame is less than 75% of the
+   * desired inter-frame interval.
+   */
+  now = get_wall_time();
+  if (now - recorder->last_frame_time < (3 * 1000000000LL / (4 * recorder->framerate)))
+    return;
+
+  recorder->last_frame_time = now;
 
   size = recorder->stage_width * recorder->stage_height * 4;
-  data = g_malloc (size);
+
+  data = g_malloc (recorder->stage_width * 4 * recorder->stage_height);
+  cogl_read_pixels (0, 0, /* x/y */
+                    recorder->stage_width,
+                    recorder->stage_height,
+                    COGL_READ_PIXELS_COLOR_BUFFER,
+                    CLUTTER_CAIRO_FORMAT_ARGB32,
+                    data);
 
   buffer = gst_buffer_new();
   GST_BUFFER_SIZE(buffer) = size;
   GST_BUFFER_MALLOCDATA(buffer) = GST_BUFFER_DATA(buffer) = data;
 
-  GST_BUFFER_TIMESTAMP(buffer) = get_wall_time() - recorder->start_time;
-
-  cogl_read_pixels (0, 0,
-                    recorder->stage_width, recorder->stage_height,
-                    COGL_READ_PIXELS_COLOR_BUFFER,
-                    CLUTTER_CAIRO_FORMAT_ARGB32,
-                    data);
+  GST_BUFFER_TIMESTAMP(buffer) = now - recorder->start_time;
 
   recorder_draw_cursor (recorder, buffer);
 
@@ -1143,9 +1161,8 @@ get_absolute_path (char *maybe_relative)
     path = g_strdup (maybe_relative);
   else
     {
-      char *cwd = g_get_current_dir ();
-      path = g_build_filename (cwd, maybe_relative, NULL);
-      g_free (cwd);
+      const char *video_dir = g_get_user_special_dir (G_USER_DIRECTORY_VIDEOS);
+      path = g_build_filename (video_dir, maybe_relative, NULL);
     }
 
   return path;
@@ -1174,6 +1191,7 @@ recorder_open_outfile (ShellRecorder *recorder)
     {
       GString *filename = g_string_new (NULL);
       const char *p;
+      char *path;
 
       for (p = pattern; *p; p++)
         {
@@ -1194,18 +1212,35 @@ recorder_open_outfile (ShellRecorder *recorder)
                   break;
                 case 'd':
                   {
-                    /* Appends date as YYYYMMDD */
-                    GDate date;
-                    GTimeVal now;
-                    g_get_current_time (&now);
-                    g_date_clear (&date, 1);
-                    g_date_set_time_val (&date, &now);
-                    g_string_append_printf (filename, "%04d%02d%02d",
-                                            g_date_get_year (&date),
-                                            g_date_get_month (&date),
-                                            g_date_get_day (&date));
+                    /* Appends date according to locale */
+                    GDateTime *datetime = g_date_time_new_now_local ();
+                    char *date_str = g_date_time_format (datetime, "%0x");
+                    char *s;
+
+                    for (s = date_str; *s; s++)
+                      if (G_IS_DIR_SEPARATOR (*s))
+                          *s = '-';
+
+                    g_string_append (filename, date_str);
+                    g_free (date_str);
+                    g_date_time_unref (datetime);
                   }
                   break;
+                case 't':
+                  {
+                    /* Appends time according to locale */
+                    GDateTime *datetime = g_date_time_new_now_local ();
+                    char *time_str = g_date_time_format (datetime, "%0X");
+                    char *s;
+
+                    for (s = time_str; *s; s++)
+                      if (G_IS_DIR_SEPARATOR (*s))
+                          *s = ':';
+
+                    g_string_append (filename, time_str);
+                    g_free (time_str);
+                    g_date_time_unref (datetime);
+                  }
                 case 'u':
                   if (recorder->unique)
                     g_string_append (filename, recorder->unique);
@@ -1231,14 +1266,14 @@ recorder_open_outfile (ShellRecorder *recorder)
       if (recorder->filename_has_count)
         flags |= O_EXCL;
 
-      outfile = open (filename->str, flags, 0666);
+      path = get_absolute_path (filename->str);
+      outfile = open (path, flags, 0666);
       if (outfile != -1)
         {
-          char *path = get_absolute_path (filename->str);
           g_printerr ("Recording to %s\n", path);
-          g_free (path);
 
           g_string_free (filename, TRUE);
+          g_free (path);
           goto out;
         }
 
@@ -1247,6 +1282,7 @@ recorder_open_outfile (ShellRecorder *recorder)
         {
           g_warning ("Cannot open output file '%s': %s", filename->str, g_strerror (errno));
           g_string_free (filename, TRUE);
+          g_free (path);
           goto out;
         }
 
@@ -1257,15 +1293,18 @@ recorder_open_outfile (ShellRecorder *recorder)
            */
           g_warning ("Name collision with existing file for '%s'", filename->str);
           g_string_free (filename, TRUE);
+          g_free (path);
           goto out;
         }
 
       g_string_free (filename, TRUE);
+      g_free (path);
 
       increment_unique (unique);
     }
 
  out:
+
   if (outfile != -1)
     recorder->unique = g_string_free (unique, FALSE);
   else
@@ -1558,9 +1597,15 @@ shell_recorder_new (ClutterStage  *stage)
  * @recorder: the #ShellRecorder
  * @framerate: Framerate used for resulting video in frames-per-second.
  *
- * Sets the number of frames per second we configure for the GStreamer pipeline.
+ * Sets the number of frames per second we try to record. Less frames
+ * will be recorded when the screen doesn't need to be redrawn this
+ * quickly. (This value will also be set as the framerate for the
+ * GStreamer pipeline; whether that has an effect on the resulting
+ * video will depend on the details of the pipeline and the codec. The
+ * default encoding to webm format doesn't pay attention to the pipeline
+ * framerate.)
  *
- * The default value is 15.
+ * The default value is 30.
  */
 void
 shell_recorder_set_framerate (ShellRecorder *recorder,
@@ -1619,7 +1664,7 @@ shell_recorder_set_filename (ShellRecorder *recorder,
  * might be used to send the output to an icecast server
  * via shout2send or similar.
  *
- * The default value is 'videorate ! theoraenc ! oggmux'
+ * The default value is 'vp8enc quality=8 speed=6 threads=%T ! queue ! webmmux'
  */
 void
 shell_recorder_set_pipeline (ShellRecorder *recorder,
@@ -1662,6 +1707,7 @@ shell_recorder_record (ShellRecorder *recorder)
        * pause
        */
       recorder->start_time = recorder->start_time + (get_wall_time() - recorder->pause_time);
+      recorder->last_frame_time = 0;
     }
   else
     {
@@ -1669,6 +1715,7 @@ shell_recorder_record (ShellRecorder *recorder)
         return FALSE;
 
       recorder->start_time = get_wall_time();
+      recorder->last_frame_time = 0;
     }
 
   recorder->state = RECORDER_STATE_RECORDING;

@@ -8,7 +8,6 @@
 
 #include "shell-wm-private.h"
 #include "shell-global.h"
-#include "shell-marshal.h"
 
 struct _ShellWM {
   GObject parent;
@@ -27,8 +26,6 @@ enum
   SWITCH_WORKSPACE,
   KILL_SWITCH_WORKSPACE,
   KILL_WINDOW_EFFECTS,
-
-  KEYBINDING,
 
   LAST_SIGNAL
 };
@@ -60,8 +57,7 @@ shell_wm_class_init (ShellWMClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0,
-                  NULL, NULL,
-                  g_cclosure_marshal_VOID__OBJECT,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 1,
                   META_TYPE_WINDOW_ACTOR);
   shell_wm_signals[MAXIMIZE] =
@@ -69,8 +65,7 @@ shell_wm_class_init (ShellWMClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0,
-                  NULL, NULL,
-                  _shell_marshal_VOID__OBJECT_INT_INT_INT_INT,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 5,
                   META_TYPE_WINDOW_ACTOR, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
   shell_wm_signals[UNMAXIMIZE] =
@@ -78,17 +73,15 @@ shell_wm_class_init (ShellWMClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0,
-                  NULL, NULL,
-                  _shell_marshal_VOID__OBJECT_INT_INT_INT_INT,
-                  G_TYPE_NONE, 1,
+                  NULL, NULL, NULL,
+                  G_TYPE_NONE, 5,
                   META_TYPE_WINDOW_ACTOR, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
   shell_wm_signals[MAP] =
     g_signal_new ("map",
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0,
-                  NULL, NULL,
-                  g_cclosure_marshal_VOID__OBJECT,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 1,
                   META_TYPE_WINDOW_ACTOR);
   shell_wm_signals[DESTROY] =
@@ -96,8 +89,7 @@ shell_wm_class_init (ShellWMClass *klass)
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0,
-                  NULL, NULL,
-                  g_cclosure_marshal_VOID__OBJECT,
+                  NULL, NULL, NULL,
                   G_TYPE_NONE, 1,
                   META_TYPE_WINDOW_ACTOR);
   shell_wm_signals[SWITCH_WORKSPACE] =
@@ -105,8 +97,7 @@ shell_wm_class_init (ShellWMClass *klass)
 		  G_TYPE_FROM_CLASS (klass),
 		  G_SIGNAL_RUN_LAST,
 		  0,
-		  NULL, NULL,
-		  _shell_marshal_VOID__INT_INT_INT,
+          NULL, NULL, NULL,
 		  G_TYPE_NONE, 3,
                   G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
   shell_wm_signals[KILL_SWITCH_WORKSPACE] =
@@ -114,46 +105,16 @@ shell_wm_class_init (ShellWMClass *klass)
 		  G_TYPE_FROM_CLASS (klass),
 		  G_SIGNAL_RUN_LAST,
 		  0,
-		  NULL, NULL,
-		  g_cclosure_marshal_VOID__VOID,
+          NULL, NULL, NULL,
 		  G_TYPE_NONE, 0);
   shell_wm_signals[KILL_WINDOW_EFFECTS] =
     g_signal_new ("kill-window-effects",
 		  G_TYPE_FROM_CLASS (klass),
 		  G_SIGNAL_RUN_LAST,
 		  0,
-		  NULL, NULL,
-		  g_cclosure_marshal_VOID__OBJECT,
+          NULL, NULL, NULL,
 		  G_TYPE_NONE, 1,
 		  META_TYPE_WINDOW_ACTOR);
-
-  /**
-   * ShellWM::keybinding:
-   * @shellwm: the #ShellWM
-   * @binding: the keybinding name
-   * @mask: the modifier mask used
-   * @window: for window keybindings, the #MetaWindow
-   * @backwards: for "reversible" keybindings, whether or not
-   * the backwards (Shifted) variant was invoked
-   *
-   * Emitted when a keybinding captured via
-   * shell_wm_takeover_keybinding() is invoked. The keybinding name
-   * (which has underscores, not hyphens) is also included as the
-   * detail of the signal name, so you can connect just specific
-   * keybindings.
-   */
-  shell_wm_signals[KEYBINDING] =
-    g_signal_new ("keybinding",
-		  G_TYPE_FROM_CLASS (klass),
-		  G_SIGNAL_RUN_LAST | G_SIGNAL_DETAILED,
-		  0,
-		  NULL, NULL,
-		  _shell_marshal_VOID__STRING_UINT_OBJECT_BOOLEAN,
-		  G_TYPE_NONE, 4,
-                  G_TYPE_STRING,
-                  G_TYPE_UINT,
-                  META_TYPE_WINDOW,
-                  G_TYPE_BOOLEAN);
 }
 
 void
@@ -180,7 +141,7 @@ shell_wm_completed_switch_workspace (ShellWM *wm)
 }
 
 /**
- * shell_wm_completed_minimize
+ * shell_wm_completed_minimize:
  * @wm: the ShellWM
  * @actor: the MetaWindowActor actor
  *
@@ -194,7 +155,7 @@ shell_wm_completed_minimize (ShellWM         *wm,
 }
 
 /**
- * shell_wm_completed_maximize
+ * shell_wm_completed_maximize:
  * @wm: the ShellWM
  * @actor: the MetaWindowActor actor
  *
@@ -208,7 +169,7 @@ shell_wm_completed_maximize (ShellWM         *wm,
 }
 
 /**
- * shell_wm_completed_unmaximize
+ * shell_wm_completed_unmaximize:
  * @wm: the ShellWM
  * @actor: the MetaWindowActor actor
  *
@@ -222,7 +183,7 @@ shell_wm_completed_unmaximize (ShellWM         *wm,
 }
 
 /**
- * shell_wm_completed_map
+ * shell_wm_completed_map:
  * @wm: the ShellWM
  * @actor: the MetaWindowActor actor
  *
@@ -236,7 +197,7 @@ shell_wm_completed_map (ShellWM         *wm,
 }
 
 /**
- * shell_wm_completed_destroy
+ * shell_wm_completed_destroy:
  * @wm: the ShellWM
  * @actor: the MetaWindowActor actor
  *
@@ -323,38 +284,4 @@ shell_wm_new (MetaPlugin *plugin)
   wm->plugin = plugin;
 
   return wm;
-}
-
-static void
-shell_wm_key_handler (MetaDisplay    *display,
-                      MetaScreen     *screen,
-                      MetaWindow     *window,
-                      XEvent         *event,
-                      MetaKeyBinding *binding,
-                      gpointer        data)
-{
-  ShellWM *wm = data;
-  gboolean backwards = (event->xkey.state & ShiftMask);
-
-  g_signal_emit (wm, shell_wm_signals[KEYBINDING],
-                 g_quark_from_string (binding->name),
-                 binding->name, binding->mask, window, backwards);
-}
-
-/**
- * shell_wm_takeover_keybinding:
- * @wm: the #ShellWM
- * @binding_name: a meta keybinding name
- *
- * Tells mutter to forward keypresses for @binding_name to the shell
- * rather than processing them internally. This will cause a
- * #ShellWM::keybinding signal to be emitted when that key is pressed.
- */
-void
-shell_wm_takeover_keybinding (ShellWM      *wm,
-                              const char   *binding_name)
-{
-  meta_keybindings_set_custom_handler (binding_name,
-                                       shell_wm_key_handler,
-                                       wm, NULL);
 }

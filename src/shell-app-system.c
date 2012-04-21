@@ -26,6 +26,7 @@
 static const char*const vendor_prefixes[] = { "gnome-",
                                               "fedora-",
                                               "mozilla-",
+                                              "debian-",
                                               NULL };
 
 enum {
@@ -69,8 +70,7 @@ static void shell_app_system_class_init(ShellAppSystemClass *klass)
                                              SHELL_TYPE_APP_SYSTEM,
                                              G_SIGNAL_RUN_LAST,
                                              0,
-                                             NULL, NULL,
-                                             g_cclosure_marshal_VOID__OBJECT,
+                                             NULL, NULL, NULL,
                                              G_TYPE_NONE, 1,
                                              SHELL_TYPE_APP);
   signals[INSTALLED_CHANGED] =
@@ -78,8 +78,7 @@ static void shell_app_system_class_init(ShellAppSystemClass *klass)
 		  SHELL_TYPE_APP_SYSTEM,
 		  G_SIGNAL_RUN_LAST,
 		  G_STRUCT_OFFSET (ShellAppSystemClass, installed_changed),
-		  NULL, NULL,
-		  g_cclosure_marshal_VOID__VOID,
+          NULL, NULL, NULL,
 		  G_TYPE_NONE, 0);
 
   g_type_class_add_private (gobject_class, sizeof (ShellAppSystemPrivate));
@@ -102,7 +101,11 @@ shell_app_system_init (ShellAppSystem *self)
                                                    NULL,
                                                    (GDestroyNotify)g_object_unref);
 
-  priv->apps_tree = gmenu_tree_new ("applications.menu", 0);
+  /* For now, we want to pick up Evince, Nautilus, etc.  We'll
+   * handle NODISPLAY semantics at a higher level or investigate them
+   * case by case.
+   */
+  priv->apps_tree = gmenu_tree_new ("applications.menu", GMENU_TREE_FLAGS_INCLUDE_NODISPLAY);
   g_signal_connect (priv->apps_tree, "changed", G_CALLBACK (on_apps_tree_changed_cb), self);
 
   priv->settings_tree = gmenu_tree_new ("gnomecc.menu", 0);
@@ -317,7 +320,15 @@ on_apps_tree_changed_cb (GMenuTree *tree,
 
   if (!gmenu_tree_load_sync (self->priv->apps_tree, &error))
     {
-      g_warning ("Failed to load apps: %s", error->message);
+      if (error)
+        {
+          g_warning ("Failed to load apps: %s", error->message);
+          g_error_free (error);
+        }
+      else
+        {
+          g_warning ("Failed to load apps");
+        }
       return;
     }
 
@@ -408,7 +419,15 @@ on_settings_tree_changed_cb (GMenuTree *tree,
   g_hash_table_remove_all (self->priv->setting_id_to_app);
   if (!gmenu_tree_load_sync (self->priv->settings_tree, &error))
     {
-      g_warning ("Failed to load settings: %s", error->message);
+      if (error)
+        {
+          g_warning ("Failed to load apps: %s", error->message);
+          g_error_free (error);
+        }
+      else
+        {
+          g_warning ("Failed to load apps");
+        }
       return;
     }
 
@@ -451,7 +470,7 @@ shell_app_system_get_settings_tree (ShellAppSystem *self)
 
 /**
  * shell_app_system_lookup_setting:
- * @self:
+ * @system:
  * @id: desktop file id
  *
  * Returns: (transfer none): Application in gnomecc.menu, or %NULL if none
@@ -591,7 +610,7 @@ shell_app_system_lookup_heuristic_basename (ShellAppSystem *system,
 
 /**
  * shell_app_system_get_all:
- * @self:
+ * @system:
  *
  * Returns: (transfer container) (element-type ShellApp): All installed applications
  */

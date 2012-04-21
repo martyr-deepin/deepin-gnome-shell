@@ -232,7 +232,7 @@ st_icon_allocate (ClutterActor           *actor,
   StIconPrivate *priv = ST_ICON (actor)->priv;
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
 
-  CLUTTER_ACTOR_CLASS (st_icon_parent_class)->allocate (actor, box, flags);
+  clutter_actor_set_allocation (actor, box, flags);
 
   if (priv->icon_texture)
     {
@@ -245,9 +245,9 @@ st_icon_allocate (ClutterActor           *actor,
        * of doing this is that it may not be obvious that they have to turn off
        * fill to align the icon non-centered in the parent container.
        *
-       * We don't use _st_allocate_fill() for a bit of efficiency and because we
-       * expect to get rid of the child actor in favor of a CoglTexture in the
-       * future.
+       * We don't use clutter_actor_allocate_align_fill() for a bit of efficiency
+       * and because we expect to get rid of the child actor in favor of a
+       * CoglTexture in the future.
        */
       content_box.x1 = (int)(0.5 + content_box.x1 + (content_box.x2 - content_box.x1 - priv->icon_size) / 2.);
       content_box.x2 = content_box.x1 + priv->icon_size;
@@ -263,8 +263,7 @@ st_icon_paint (ClutterActor *actor)
 {
   StIconPrivate *priv = ST_ICON (actor)->priv;
 
-  /* Chain up to paint background */
-  CLUTTER_ACTOR_CLASS (st_icon_parent_class)->paint (actor);
+  st_widget_paint_background (ST_WIDGET (actor));
 
   if (priv->icon_texture)
     {
@@ -432,7 +431,7 @@ st_icon_finish_update (StIcon *icon)
     {
       priv->icon_texture = priv->pending_texture;
       priv->pending_texture = NULL;
-      clutter_actor_set_parent (priv->icon_texture, CLUTTER_ACTOR (icon));
+      clutter_actor_add_child (CLUTTER_ACTOR (icon), priv->icon_texture);
 
       /* Remove the temporary ref we added */
       g_object_unref (priv->icon_texture);
@@ -482,13 +481,11 @@ st_icon_update (StIcon *icon)
   if (priv->gicon)
     {
       priv->pending_texture = st_texture_cache_load_gicon (cache,
-                                                           (priv->icon_type != ST_ICON_APPLICATION &&
-                                                            priv->icon_type != ST_ICON_DOCUMENT) ?
-                                                           theme_node : NULL,
+                                                           theme_node,
                                                            priv->gicon,
                                                            priv->icon_size);
     }
- else if (priv->icon_name)
+  else if (priv->icon_name)
     {
       priv->pending_texture = st_texture_cache_load_icon_name (cache,
                                                                theme_node,

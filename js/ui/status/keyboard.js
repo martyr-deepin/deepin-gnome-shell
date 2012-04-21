@@ -14,15 +14,12 @@ const PopupMenu = imports.ui.popupMenu;
 const PanelMenu = imports.ui.panelMenu;
 const Util = imports.misc.util;
 
-function LayoutMenuItem() {
-    this._init.apply(this, arguments);
-}
-
-LayoutMenuItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+const LayoutMenuItem = new Lang.Class({
+    Name: 'LayoutMenuItem',
+    Extends: PopupMenu.PopupBaseMenuItem,
 
     _init: function(config, id, indicator, long_name) {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+        this.parent();
 
         this._config = config;
         this._id = id;
@@ -33,20 +30,18 @@ LayoutMenuItem.prototype = {
     },
 
     activate: function(event) {
-        PopupMenu.PopupBaseMenuItem.prototype.activate.call(this);
+        this.parent(event);
+
         this._config.lock_group(this._id);
     }
-};
+});
 
-function XKBIndicator() {
-    this._init.call(this);
-}
-
-XKBIndicator.prototype = {
-    __proto__: PanelMenu.Button.prototype,
+const XKBIndicator = new Lang.Class({
+    Name: 'XKBIndicator',
+    Extends: PanelMenu.Button,
 
     _init: function() {
-        PanelMenu.Button.prototype._init.call(this, St.Align.START);
+        this.parent(0.0, _("Keyboard"));
 
         this._container = new Shell.GenericContainer();
         this._container.connect('get-preferred-width', Lang.bind(this, this._containerGetPreferredWidth));
@@ -221,4 +216,4 @@ XKBIndicator.prototype = {
         for (let i = 0; i < this._labelActors.length; i++)
             this._labelActors[i].allocate_align_fill(box, 0.5, 0, false, false, flags);
     }
-};
+});
