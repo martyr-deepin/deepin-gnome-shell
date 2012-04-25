@@ -26,7 +26,7 @@ const RunDialog = imports.ui.runDialog;
 const Layout = imports.ui.layout;
 const LookingGlass = imports.ui.lookingGlass;
 const NetworkAgent = imports.ui.networkAgent;
-const NotificationDaemon = imports.ui.notificationDaemon;
+// const NotificationDaemon = imports.ui.notificationDaemon;
 const WindowAttentionHandler = imports.ui.windowAttentionHandler;
 const Scripting = imports.ui.scripting;
 const ShellDBus = imports.ui.shellDBus;
@@ -51,7 +51,7 @@ let runDialog = null;
 let lookingGlass = null;
 let wm = null;
 let messageTray = null;
-let notificationDaemon = null;
+// let notificationDaemon = null;
 let windowAttentionHandler = null;
 let telepathyClient = null;
 let ctrlAltTabManager = null;
@@ -218,7 +218,7 @@ function start() {
     wm = new WindowManager.WindowManager();
     messageTray = new MessageTray.MessageTray();
     keyboard = new Keyboard.Keyboard();
-    notificationDaemon = new NotificationDaemon.NotificationDaemon();
+    // notificationDaemon = new NotificationDaemon.NotificationDaemon();
     windowAttentionHandler = new WindowAttentionHandler.WindowAttentionHandler();
 
     if (global.session_type == Shell.SessionType.USER)

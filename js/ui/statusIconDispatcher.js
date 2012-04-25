@@ -5,7 +5,7 @@ const Shell = imports.gi.Shell;
 const Signals = imports.signals;
 
 const MessageTray = imports.ui.messageTray;
-const NotificationDaemon = imports.ui.notificationDaemon;
+// const NotificationDaemon = imports.ui.notificationDaemon;
 const Util = imports.misc.util;
 
 const STANDARD_TRAY_ICON_IMPLEMENTATIONS = {
