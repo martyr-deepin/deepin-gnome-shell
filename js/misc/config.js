@@ -9,11 +9,11 @@ const GJS_VERSION = '1.32.0';
 /* 1 if gnome-bluetooth is available, 0 otherwise */
 const HAVE_BLUETOOTH = 1;
 /* The system TLS CA list */
-const SHELL_SYSTEM_CA_FILE = '/etc/pki/tls/certs/ca-bundle.crt';
+const SHELL_SYSTEM_CA_FILE = '/etc/ssl/certs/ca-certificates.crt';
 /* gettext package */
 const GETTEXT_PACKAGE = 'gnome-shell';
 /* locale dir */
-const LOCALEDIR = '/home/otaylor/gnome/install/share/locale';
+const LOCALEDIR = '/usr/share/locale';
 /* other standard directories */
-const LIBEXECDIR = '/home/otaylor/gnome/install/libexec';
-const SYSCONFDIR = '/home/otaylor/gnome/install/etc';
+const LIBEXECDIR = '/usr/lib/gnome-shell';
+const SYSCONFDIR = '/etc';
