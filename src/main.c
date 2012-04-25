@@ -147,7 +147,7 @@ shell_dbus_init (gboolean replace)
   /* ...and the org.gnome.Magnifier service. */
                             MAGNIFIER_DBUS_SERVICE, FALSE,
   /* ...and the org.freedesktop.Notifications service. */
-                            "org.freedesktop.Notifications", FALSE,
+                            /* "org.freedesktop.Notifications", FALSE, */
                             NULL);
   /* ...and the on-screen keyboard service */
   shell_dbus_acquire_name (bus,
