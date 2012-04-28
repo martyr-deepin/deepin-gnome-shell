@@ -51,7 +51,9 @@ dist_theme_DATA =				\
 	theme/toggle-on-us.svg			\
 	theme/toggle-on-intl.svg		\
 	theme/ws-switch-arrow-up.svg		\
-	theme/ws-switch-arrow-down.svg
+	theme/ws-switch-arrow-down.svg		\
+    theme/logo.png		\
+    theme/logoActive.png
 
 gsettings_SCHEMAS = org.gnome.shell.gschema.xml
 
