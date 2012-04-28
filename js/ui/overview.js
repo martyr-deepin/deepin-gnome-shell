@@ -496,7 +496,8 @@ const Overview = new Lang.Class({
         let rtl = (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL);
 
         let contentY = Main.panel.actor.height;
-        let contentHeight = primary.height - contentY - Main.messageTray.actor.height;
+        // let contentHeight = primary.height - contentY - Main.messageTray.actor.height;
+        let contentHeight = primary.height - contentY;
 
         this._group.set_position(primary.x, primary.y);
         this._group.set_size(primary.width, primary.height);
