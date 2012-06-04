@@ -357,15 +357,10 @@ StTooltip StLabel { /*Controls the tooltips. Oh really, Einstein!*/
 
 #panelActivities {
 	padding: 1px 0px 0px 0px;
-	border-radius-topleft: 0px;
-	border-radius-bottomleft: 0px;
     background-image: url("logo.png");
-    width: 65px;
-    height: 32px;
+    width: 61px;
+    height: 30px;
     color: rgba(0,0,0,0.0);
-}
-
-.panelActivitiesHover {
 }
 
 #panelActivities:hover {
