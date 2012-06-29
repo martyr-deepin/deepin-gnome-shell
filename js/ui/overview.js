@@ -521,7 +521,13 @@ const Overview = new Lang.Class({
         }
         this._dash.actor.set_x(dashX);
 
-        this._viewSelector.actor.set_position(viewX, viewY);
+        // this._viewSelector.actor.set_position(viewX, viewY);
+		if (Main.panel.edge == 0) {
+			this._viewSelector.actor.set_position(viewX, viewY);	
+		} else {
+			this._viewSelector.actor.set_position(viewX, 0);	
+		}
+		
         this._viewSelector.actor.set_size(viewWidth, viewHeight);
     },
 
