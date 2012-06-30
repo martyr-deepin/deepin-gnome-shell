@@ -193,12 +193,17 @@ const WindowManager = new Lang.Class({
         let xDest = primary.x;
         if (Clutter.get_default_text_direction() == Clutter.TextDirection.RTL)
             xDest += primary.width;
+		
+		let yDest = 0;
+		if (Main.panel.edge != 0) {
+			yDest = primary.height;
+		}
 
         Tweener.addTween(actor,
                          { scale_x: 0.0,
                            scale_y: 0.0,
                            x: xDest,
-                           y: 0,
+                           y: yDest,
                            time: WINDOW_ANIMATION_TIME,
                            transition: 'easeOutQuad',
                            onComplete: this._minimizeWindowDone,
