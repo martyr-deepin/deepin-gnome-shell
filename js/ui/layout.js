@@ -1,5 +1,7 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
+const Gio = imports.gi.Gio;
+const ExtensionUtils = imports.misc.extensionUtils;
 const Clutter = imports.gi.Clutter;
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
@@ -145,7 +147,34 @@ const LayoutManager = new Lang.Class({
     },
 
     _updateBoxes: function() {
-        this.panelBox.set_position(this.primaryMonitor.x, this.primaryMonitor.y);
+		// I know below code is very dirty, please talk with gnome-shell developers,
+		// i just a programmer hate bad design.
+		let panel_settings = ExtensionUtils.extensions["panel-settings@linuxdeepin.com"];
+		if (panel_settings == undefined) {
+			this.panelBox.set_position(this.primaryMonitor.x, this.primaryMonitor.y); 
+		} else {
+			let settings_file = Gio.Gio.file_new_for_path(panel_settings.path + '/settings.json');
+			let settings = new Object;
+			if (settings_file._file.query_exists(null)) {
+				[flag, data] = settings_file._file.load_contents(null);
+				
+				if (flag) {
+					this.settings = JSON.parse(data);
+					
+					if (this.settings.settings.edge == 1) {
+						this.panelBox.set_position(this.primaryMonitor.x, 
+												   this.primaryMonitor.y + this.primaryMonitor.height - this.panelBox.get_height()); 	
+					} else {
+						this.panelBox.set_position(this.primaryMonitor.x, this.primaryMonitor.y); 		
+					}
+				} else {
+					this.panelBox.set_position(this.primaryMonitor.x, this.primaryMonitor.y); 	
+				}
+			} else {
+				this.panelBox.set_position(this.primaryMonitor.x, this.primaryMonitor.y); 
+			}
+		}
+		
         this.panelBox.set_size(this.primaryMonitor.width, -1);
 
         this.keyboardBox.set_position(this.bottomMonitor.x,
